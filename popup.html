@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SRI Pro Downloader</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #10b981;
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --text: #1e293b;
+      --text-light: #64748b;
+      --border: #e2e8f0;
+    }
+
+    body {
+      width: 380px;
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+    }
+
+    .header {
+      background: linear-gradient(135deg, var(--primary), #4f46e5);
+      color: white;
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+
+    .header p {
+      margin: 5px 0 0;
+      font-size: 0.85rem;
+      opacity: 0.9;
+    }
+
+    .container {
+      padding: 20px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border-radius: 12px;
+      padding: 15px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      margin-bottom: 15px;
+      border: 1px solid var(--border);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+
+    .stat-item {
+      text-align: center;
+      padding: 10px;
+      background: #f1f5f9;
+      border-radius: 8px;
+    }
+
+    .stat-value {
+      display: block;
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--primary);
+    }
+
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--text-light);
+    }
+
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 10px;
+      font-size: 0.9rem;
+    }
+
+    .btn-primary {
+      background-color: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background-color: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-success {
+      background-color: var(--success);
+      color: white;
+    }
+
+    .btn-outline {
+      background-color: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .btn-outline:hover {
+      background-color: #f1f5f9;
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .progress-container {
+      margin: 15px 0;
+      display: none;
+    }
+
+    .progress-bar-bg {
+      background: #e2e8f0;
+      height: 8px;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      background: var(--success);
+      height: 100%;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .progress-text {
+      font-size: 0.8rem;
+      text-align: center;
+      margin-top: 5px;
+      color: var(--text-light);
+    }
+
+    .invoice-list {
+      max-height: 200px;
+      overflow-y: auto;
+      font-size: 0.85rem;
+    }
+
+    .invoice-item {
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .invoice-item:last-child {
+      border-bottom: none;
+    }
+
+    .invoice-info {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .invoice-amount {
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .footer {
+      text-align: center;
+      padding: 15px;
+      font-size: 0.75rem;
+      color: var(--text-light);
+      border-top: 1px solid var(--border);
+    }
+
+    /* Scrollbar styling */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <h1>SRI Pro Downloader</h1>
+    <p>Gestión inteligente de comprobantes</p>
+  </div>
+
+  <div class="container">
+    <!-- Dashboard Stats -->
+    <div class="stats-grid">
+      <div class="stat-item">
+        <span class="stat-value" id="totalInvoices">0</span>
+        <span class="stat-label">Facturas</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-value" id="totalAmount">$0.00</span>
+        <span class="stat-label">Monto Total</span>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="card">
+      <button id="scanBtn" class="btn btn-primary">
+        🔍 Escanear Página Actual
+      </button>
+
+      <div id="actionButtons" style="display: none;">
+        <button id="downloadBtn" class="btn btn-success">
+          ⬇️ Descargar XMLs
+        </button>
+        <button id="exportBtn" class="btn btn-outline">
+          📊 Exportar a Excel (CSV)
+        </button>
+        <button id="downloadAllBtn" class="btn btn-outline"
+          style="margin-top: 10px; border-color: var(--primary); color: var(--primary);">
+          📑 Descargar Todas las Páginas
+        </button>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div id="progressContainer" class="progress-container">
+      <div class="progress-bar-bg">
+        <div id="progressBar" class="progress-bar-fill"></div>
+      </div>
+      <div id="progressText" class="progress-text">Iniciando...</div>
+    </div>
+
+
+    <!-- Configuración -->
+    <div class="card" style="margin-top: 15px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <h3 style="margin: 0; font-size: 0.9rem;">Configuración</h3>
+        <button id="toggleConfigBtn" class="btn-outline"
+          style="width: auto; padding: 4px 8px; font-size: 0.7rem;">⚙️</button>
+      </div>
+
+      <div id="configPanel" style="display: none;">
+        <label style="display: block; font-size: 0.8rem; margin-bottom: 5px; color: var(--text-light);">Carpeta de
+          Descarga (dentro de Downloads):</label>
+        <div style="display: flex; gap: 5px;">
+          <input type="text" id="folderInput" placeholder="Ej: Facturas SRI/2025"
+            style="flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem;">
+          <button id="saveConfigBtn" class="btn-primary" style="width: auto; padding: 8px 12px;">Guardar</button>
+        </div>
+        <div id="configStatus" style="font-size: 0.75rem; margin-top: 5px; min-height: 15px;"></div>
+      </div>
+    </div>
+
+    <!-- Debug Log (Oculto por defecto) -->
+    <div id="debugLog"
+      style="display: none; background: #333; color: #fff; padding: 10px; font-size: 0.7rem; margin-top: 10px; border-radius: 6px; max-height: 100px; overflow-y: auto;">
+    </div>
+
+    <!-- List -->
+    <div class="card" id="listContainer" style="display: none;">
+      <h3 style="margin: 0 0 10px 0; font-size: 0.9rem;">Detalle</h3>
+      <div id="facturasList" class="invoice-list"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="https://github.com/jonavez">Jonathan Chavez</a> &copy; 2025
+  </div>
+
+  <script type=" module" src="popup.js"></script>
+</body>
+
+</html>

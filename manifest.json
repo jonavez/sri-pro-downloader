@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "SRI Pro Downloader",
+  "version": "2.0",
+  "description": "Herramienta profesional para descarga masiva y gestión de XMLs del SRI.",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://srienlinea.sri.gob.ec/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "SRI Pro Downloader",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://srienlinea.sri.gob.ec/*"],
+      "js": ["content.js"],
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["utils.js", "excel_export.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
