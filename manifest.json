@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "SRI Pro Downloader",
+  "version": "2.4.1",
+  "description": "Herramienta profesional para descarga masiva y gestión de XMLs del SRI.",
+  "permissions": ["activeTab", "downloads", "storage", "scripting"],
+  "host_permissions": ["*://*.sri.gob.ec/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.sri.gob.ec/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
