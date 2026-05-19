@@ -43,7 +43,7 @@ export function convertToCSV(invoices) {
 }
 
 export function downloadCSV(csvContent, filename = 'reporte_facturas.csv') {
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   
   const link = document.createElement('a');
