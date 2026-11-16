@@ -69,7 +69,7 @@ function detectarOrigenConsulta() {
   return "DESCONOCIDO";
 }
 
-function extractInvoiceData() {
+function extractInvoiceData(pageIndex = 1) {
   const logs = [];
   const log = (msg) => {
     console.log(msg);
@@ -300,6 +300,7 @@ function extractInvoiceData() {
           xmlLinkId,
           origenConsulta,
           rowIndex: index,
+          pageIndex: pageIndex,
         });
       }
     } catch (rowError) {
@@ -383,6 +384,7 @@ async function fetchXMLContent(linkId, claveAcceso = null) {
 
   if (!link) return null;
 
+  // 1. Fetch directo por href si es enlace estatico
   const href = link.getAttribute("href");
   if (href && href !== "#" && !href.startsWith("javascript:")) {
     try {
@@ -390,7 +392,7 @@ async function fetchXMLContent(linkId, claveAcceso = null) {
       if (res.ok) {
         const text = await res.text();
         if (isLikelySRIXml(text)) {
-          return text;
+          return text.trim();
         }
       }
     } catch (e) {
@@ -398,44 +400,66 @@ async function fetchXMLContent(linkId, claveAcceso = null) {
     }
   }
 
-  // En PrimeFaces/Mojarra, el link ejecuta un submit de formulario
+  // 2. Submit de formulario JSF/PrimeFaces via application/x-www-form-urlencoded
   const form = link.closest("form") || document.forms[0];
   if (form) {
     try {
-      const formData = new FormData(form);
+      const params = new URLSearchParams();
 
-      // Determinar parametro exacto: desde onclick (patron jsfcljs o PrimeFaces.ab) o name o id
+      // Recorrer todos los elementos del formulario
+      const elements = form.elements;
+      for (let i = 0; i < elements.length; i++) {
+        const el = elements[i];
+        if (el.name && !el.disabled) {
+          if (el.type === "radio" || el.type === "checkbox") {
+            if (el.checked) params.append(el.name, el.value);
+          } else if (el.type !== "submit" && el.type !== "button") {
+            params.append(el.name, el.value);
+          }
+        }
+      }
+
+      // Determinar parametro exacto del enlace
       let targetParam = link.id;
       const onclickAttr = link.getAttribute("onclick") || "";
-      const match = onclickAttr.match(/'([^']+)':'([^']+)'/) || onclickAttr.match(/"([^"]+)":"([^"]+)"/);
+      const match =
+        onclickAttr.match(/'([^']+)':'([^']+)'/) ||
+        onclickAttr.match(/"([^"]+)":"([^"]+)"/);
       if (match) {
         targetParam = match[1];
       } else if (link.name) {
         targetParam = link.name;
       }
 
-      formData.set(targetParam, targetParam);
+      // Parametros JSF
+      params.set(targetParam, targetParam);
       if (link.id && link.id !== targetParam) {
-        formData.set(link.id, link.id);
+        params.set(link.id, link.id);
       }
       if (form.id) {
-        formData.set(form.id, form.id);
+        params.set(form.id, form.id);
       }
-      formData.set("javax.faces.source", targetParam);
+      params.set("javax.faces.source", targetParam);
 
-      // Asegurar ViewState fresco del DOM si existe
-      const vsInput = form.querySelector('[name="javax.faces.ViewState"]') || document.querySelector('[name="javax.faces.ViewState"]');
+      // ViewState fresco
+      const vsInput =
+        form.querySelector('[name="javax.faces.ViewState"]') ||
+        document.querySelector('[name="javax.faces.ViewState"]');
       if (vsInput && vsInput.value) {
-        formData.set("javax.faces.ViewState", vsInput.value);
+        params.set("javax.faces.ViewState", vsInput.value);
       }
 
       const actionUrl = form.action || window.location.href;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
+      const timer = setTimeout(() => controller.abort(), 6000);
 
       const res = await fetch(actionUrl, {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        body: params.toString(),
         credentials: "include",
         signal: controller.signal,
       });
@@ -444,7 +468,7 @@ async function fetchXMLContent(linkId, claveAcceso = null) {
       if (res.ok) {
         const text = await res.text();
         if (isLikelySRIXml(text)) {
-          return text;
+          return text.trim();
         }
       }
     } catch (e) {
@@ -454,24 +478,180 @@ async function fetchXMLContent(linkId, claveAcceso = null) {
   return null;
 }
 
-// Navegación
+// ─── Navegacion y Paginador PrimeFaces ─────────────────────────────────
+
 function hasNextPage() {
   const nextBtn = document.querySelector(".ui-paginator-next");
   return nextBtn && !nextBtn.classList.contains("ui-state-disabled");
 }
 
-async function goToNextPage() {
-  const nextBtn = document.querySelector(".ui-paginator-next");
-  if (nextBtn) {
-    nextBtn.click();
-    await new Promise((r) => setTimeout(r, 3000));
+async function waitForTableUpdate() {
+  const firstRowBefore = document.querySelector("tr[data-ri]");
+  const beforeKey = firstRowBefore
+    ? (firstRowBefore.getAttribute("data-ri") + "_" + (firstRowBefore.textContent || "").substring(0, 40))
+    : "";
+
+  const start = Date.now();
+  while (Date.now() - start < 3500) {
+    await new Promise((r) => setTimeout(r, 200));
+    const firstRowNow = document.querySelector("tr[data-ri]");
+    const currentKey = firstRowNow
+      ? (firstRowNow.getAttribute("data-ri") + "_" + (firstRowNow.textContent || "").substring(0, 40))
+      : "";
+    if (firstRowNow && currentKey !== beforeKey) {
+      await new Promise((r) => setTimeout(r, 300));
+      return true;
+    }
   }
+  return true;
 }
 
-// Listeners
+async function goToNextPage() {
+  const nextBtn = document.querySelector(".ui-paginator-next");
+  if (!nextBtn || nextBtn.classList.contains("ui-state-disabled")) return false;
+
+  nextBtn.click();
+  await waitForTableUpdate();
+  return true;
+}
+
+/**
+ * Navega a una pagina especifica del paginador de PrimeFaces.
+ *
+ * @async
+ * @param {number} targetPage - Numero de pagina (1-based).
+ * @returns {Promise<boolean>}
+ */
+async function goToPage(targetPage) {
+  if (!targetPage || targetPage < 1) return false;
+
+  const getActivePage = () => {
+    const activeBtn = document.querySelector(".ui-paginator-page.ui-state-active");
+    return activeBtn ? parseInt(activeBtn.textContent.trim(), 10) : 1;
+  };
+
+  let current = getActivePage();
+  if (current === targetPage) return true;
+
+  if (targetPage === 1) {
+    const firstBtn = document.querySelector(".ui-paginator-first:not(.ui-state-disabled)");
+    if (firstBtn) {
+      firstBtn.click();
+      await waitForTableUpdate();
+      return true;
+    }
+  }
+
+  const pageBtns = document.querySelectorAll(".ui-paginator-pages .ui-paginator-page");
+  for (const btn of pageBtns) {
+    if (btn.textContent.trim() === String(targetPage)) {
+      btn.click();
+      await waitForTableUpdate();
+      return true;
+    }
+  }
+
+  while (current < targetPage && hasNextPage()) {
+    await goToNextPage();
+    current = getActivePage();
+    if (current === targetPage) return true;
+  }
+
+  return getActivePage() === targetPage;
+}
+
+/**
+ * Escanea de forma iterativa todas las paginas de la consulta SRI activa,
+ * acumulando comprobantes y deduplicandolos.
+ *
+ * @async
+ * @returns {Promise<{invoices: Array<object>, total: number, origenConsulta: string, totalPages: number}>}
+ */
+async function scanAllPages() {
+  const allInvoices = [];
+  const seenKeys = new Set();
+  let origenConsultaGlobal = "DESCONOCIDO";
+
+  // Intentar regresar a la primera pagina si no estamos en ella
+  const firstBtn = document.querySelector(".ui-paginator-first:not(.ui-state-disabled)");
+  if (firstBtn) {
+    firstBtn.click();
+    await waitForTableUpdate();
+  }
+
+  let currentPage = 1;
+  const maxPages = 50; // Salvaguarda ISO contra loops
+
+  while (currentPage <= maxPages) {
+    const pageData = extractInvoiceData(currentPage);
+    if (pageData.origenConsulta && pageData.origenConsulta !== "DESCONOCIDO") {
+      origenConsultaGlobal = pageData.origenConsulta;
+    }
+
+    if (pageData.invoices && pageData.invoices.length > 0) {
+      for (const inv of pageData.invoices) {
+        const key = inv.claveAcceso || inv.numero;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          allInvoices.push(inv);
+        }
+      }
+    }
+
+    try {
+      chrome.runtime.sendMessage({
+        action: "scanAllProgress",
+        page: currentPage,
+        foundInPage: pageData.invoices.length,
+        totalAccumulated: allInvoices.length,
+      });
+    } catch (e) {}
+
+    if (hasNextPage()) {
+      const moved = await goToNextPage();
+      if (!moved) break;
+      currentPage++;
+    } else {
+      break;
+    }
+  }
+
+  // Regresar a pagina 1
+  try {
+    const returnFirst = document.querySelector(".ui-paginator-first:not(.ui-state-disabled)");
+    if (returnFirst) {
+      returnFirst.click();
+      await waitForTableUpdate();
+    }
+  } catch (e) {}
+
+  return {
+    invoices: allInvoices,
+    total: allInvoices.length,
+    origenConsulta: origenConsultaGlobal,
+    totalPages: currentPage,
+  };
+}
+
+// ─── Listeners de Mensajes ─────────────────────────────────────────────
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "extractInvoices") {
-    sendResponse(extractInvoiceData());
+    sendResponse(extractInvoiceData(1));
+  }
+
+  if (request.action === "scanAllPages") {
+    scanAllPages()
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ error: err.message, invoices: [] }));
+    return true;
+  }
+
+  if (request.action === "goToPage") {
+    goToPage(request.page)
+      .then((success) => sendResponse({ success }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
   }
 
   if (request.action === "downloadSingleXML") {

@@ -231,6 +231,19 @@ body {
   color: var(--primary);
 }
 
+.btn-scan-all {
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 600;
+  margin-bottom: 0;
+}
+
+.btn-scan-all:hover {
+  background-color: #eff6ff;
+  border-color: var(--primary-hover);
+  color: var(--primary-hover);
+}
+
 /* ─── Íconos en Botones ───────────────────────────────────────────────── */
 
 .btn-icon {

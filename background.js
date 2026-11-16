@@ -43,7 +43,7 @@ const QUEUE_ENTRY_TTL_MS = 60_000;
  * Tamaño de micro-lote para ingesta segura sin timeout.
  * @const {number}
  */
-const INGEST_CHUNK_SIZE = 4;
+const INGEST_CHUNK_SIZE = 3;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Estado Interno de Descargas
@@ -467,7 +467,16 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
     }
   });
 
-  // Dividir en chunks de 5 claves
+  // Ordenar comprobantes por página de origen para agrupar peticiones por vista de tabla
+  por_sincronizar.sort((a, b) => {
+    const invA = keyToInvoiceMap.get(a.clave_acceso);
+    const invB = keyToInvoiceMap.get(b.clave_acceso);
+    const pageA = (invA && invA.pageIndex) || 1;
+    const pageB = (invB && invB.pageIndex) || 1;
+    return pageA - pageB;
+  });
+
+  // Dividir en chunks de tamaño seguro
   const chunks = [];
   for (let i = 0; i < por_sincronizar.length; i += INGEST_CHUNK_SIZE) {
     chunks.push(
@@ -480,6 +489,21 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
     const chunkPercent = Math.round(
       40 + ((idx + 1) / chunks.length) * 55
     );
+
+    // Navegar a la página correspondiente en la pestaña activa si es necesario
+    const firstClave = chunkKeys[0];
+    const firstInv = keyToInvoiceMap.get(firstClave);
+    const targetPage = (firstInv && firstInv.pageIndex) || 1;
+    if (tabId && targetPage > 0) {
+      try {
+        await chrome.tabs.sendMessage(tabId, {
+          action: "goToPage",
+          page: targetPage,
+        });
+      } catch (navErr) {
+        // Continuar si la navegación por mensaje no responde
+      }
+    }
 
     await chrome.storage.local.set({
       emiteSyncState: {
@@ -548,7 +572,12 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
                   lower.includes("<?xml") ||
                   lower.includes("<factura") ||
                   lower.includes("<comprobante") ||
-                  lower.includes("<autorizacion")
+                  lower.includes("<autorizacion") ||
+                  lower.includes("<notacredito") ||
+                  lower.includes("<notadebito") ||
+                  lower.includes("<comprobanteretencion") ||
+                  lower.includes("<liquidacioncompra") ||
+                  lower.includes("<guiaremision")
                 );
               };
 
@@ -559,16 +588,28 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
                   const res = await fetch(link.href, { credentials: "include" });
                   if (res.ok) {
                     const text = await res.text();
-                    if (isLikelyXml(text)) return text;
+                    if (isLikelyXml(text)) return text.trim();
                   }
                 } catch (e) {}
               }
 
-              // 2. Submit de formulario JSF/PrimeFaces
+              // 2. Submit de formulario JSF/PrimeFaces vía application/x-www-form-urlencoded
               const form = link.closest("form") || document.forms[0];
               if (form) {
                 try {
-                  const formData = new FormData(form);
+                  const params = new URLSearchParams();
+                  const elements = form.elements;
+                  for (let i = 0; i < elements.length; i++) {
+                    const el = elements[i];
+                    if (el.name && !el.disabled) {
+                      if (el.type === "radio" || el.type === "checkbox") {
+                        if (el.checked) params.append(el.name, el.value);
+                      } else if (el.type !== "submit" && el.type !== "button") {
+                        params.append(el.name, el.value);
+                      }
+                    }
+                  }
+
                   let targetParam = link.id;
                   const onclickAttr = link.getAttribute("onclick") || "";
                   const match =
@@ -577,31 +618,35 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
                   if (match) targetParam = match[1];
                   else if (link.name) targetParam = link.name;
 
-                  formData.set(targetParam, targetParam);
+                  params.set(targetParam, targetParam);
                   if (link.id && link.id !== targetParam)
-                    formData.set(link.id, link.id);
-                  if (form.id) formData.set(form.id, form.id);
-                  formData.set("javax.faces.source", targetParam);
+                    params.set(link.id, link.id);
+                  if (form.id) params.set(form.id, form.id);
+                  params.set("javax.faces.source", targetParam);
 
                   const vsInput =
                     form.querySelector('[name="javax.faces.ViewState"]') ||
                     document.querySelector('[name="javax.faces.ViewState"]');
                   if (vsInput && vsInput.value)
-                    formData.set("javax.faces.ViewState", vsInput.value);
+                    params.set("javax.faces.ViewState", vsInput.value);
 
                   const actionUrl = form.action || window.location.href;
                   const controller = new AbortController();
-                  const timer = setTimeout(() => controller.abort(), 12000);
+                  const timer = setTimeout(() => controller.abort(), 6000);
                   const res = await fetch(actionUrl, {
                     method: "POST",
-                    body: formData,
+                    headers: {
+                      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    },
+                    body: params.toString(),
                     credentials: "include",
                     signal: controller.signal,
                   });
                   clearTimeout(timer);
                   if (res.ok) {
                     const text = await res.text();
-                    if (isLikelyXml(text)) return text;
+                    if (isLikelyXml(text)) return text.trim();
                   }
                 } catch (e) {}
               }
@@ -683,6 +728,13 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
 
     // Breve pausa preventiva entre micro-lotes para descongestionar conexiones
     await new Promise((r) => setTimeout(r, 600));
+  }
+
+  // Restaurar la pestaña a la página 1 si se navegó durante la sincronización
+  if (tabId) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { action: "goToPage", page: 1 });
+    } catch (e) {}
   }
 
   // Contar notas de crédito guardadas definitivas
@@ -817,10 +869,10 @@ function handleDownload(url, filename, sendResponse) {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === "install") {
-    console.log("[SRI Pro] Extensión instalada correctamente (v3.4.1).");
+    console.log("[SRI Pro] Extensión instalada correctamente (v3.5.0).");
   } else if (details.reason === "update") {
     console.log(
-      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.4.1.`
+      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.5.0.`
     );
     filenameQueue.clear();
   }

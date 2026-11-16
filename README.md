@@ -1,12 +1,15 @@
 # SRI Pro Downloader
 
-**SRI Pro Downloader** es una extension profesional para Google Chrome (v3.4.1) disenada para facilitar la descarga masiva, gestion y sincronizacion automatizada de comprobantes electronicos (XML) tanto emitidos como recibidos desde el portal del SRI en Linea (Ecuador) hacia la plataforma de facturacion en la nube **EMITE.ec**.
+**SRI Pro Downloader** es una extension profesional para Google Chrome (v3.5.0) disenada para facilitar la descarga masiva, gestion y sincronizacion automatizada de comprobantes electronicos (XML) tanto emitidos como recibidos desde el portal del SRI en Linea (Ecuador) hacia la plataforma de facturacion en la nube **EMITE.ec**.
 
 ---
 
-## Caracteristicas (v3.4.1)
+## Caracteristicas (v3.5.0)
 
+- **Escanear Todas las Paginas (Multi-Pagina)**: Crawler inteligente que recorre iterativamente el paginador de PrimeFaces del SRI, recolectando y deduplicando cientos de facturas en todas las paginas con feedback en tiempo real.
 - **Sincronizacion en 1 Clic con EMITE.ec**: Sincroniza directamente todos tus comprobantes consultados en el SRI hacia tu empresa en EMITE.ec sin necesidad de descargar archivos a tu disco local.
+- **Extraccion de XML Ultra-Resiliente**: Envio de solicitudes JSF urlencoded nativas desde la sesion autenticada del navegador, garantizando la obtencion directa del XML y eliminando dependencias de servicios SOAP externos.
+- **Navegacion Asistida durante la Ingesta**: Para consultas multi-pagina, la extension posiciona la vista de la tabla en la pagina adecuada para extraer el XML en milisegundos antes del envio a la API.
 - **Deteccion Inteligente de Duplicadas**: Algoritmo diferencial en dos fases (Pre-check) que consulta la base de datos de EMITE.ec y omite facturas previamente registradas, ahorrando ancho de banda y tiempo.
 - **Deteccion de Facturas Anuladas**: Identifica comprobantes marcados como anulados o cancelados en el SRI y actualiza su estado en EMITE.ec de forma automatizada.
 - **Clasificacion de Notas de Credito**: Identifica notas de credito (`cod_doc = '04'`), asociandolas con el comprobante sustento correspondiente de forma no destructiva.

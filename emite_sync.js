@@ -13,7 +13,7 @@
  * @module emite_sync
  */
 
-const DEFAULT_TIMEOUT_MS = 75_000;
+const DEFAULT_TIMEOUT_MS = 120_000;
 
 /**
  * Normaliza la URL base de la API eliminando barras inclinadas al final.

@@ -11,6 +11,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // ─── Elementos del DOM ───────────────────────────────────────────────
   const scanBtn = document.getElementById("scanBtn");
+  const scanAllBtn = document.getElementById("scanAllBtn");
   const downloadBtn = document.getElementById("downloadBtn");
   const exportBtn = document.getElementById("exportBtn");
   const downloadAllBtn = document.getElementById("downloadAllBtn");
@@ -177,6 +178,106 @@ document.addEventListener("DOMContentLoaded", function () {
       debugLog.classList.remove("hidden");
     }
   });
+
+  // ─── Escanear Todas las Páginas (Multi-Página) ──────────────────────
+
+  if (scanAllBtn) {
+    scanAllBtn.addEventListener("click", async () => {
+      resetPreviousData();
+      updateStatus("Iniciando escaneo de todas las páginas...", 5);
+      clearDebug();
+
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!tab) {
+        updateStatus("Error: No se detectó pestaña activa", 0, true);
+        return;
+      }
+
+      // Escuchar progreso en vivo del crawler multi-página
+      const progressListener = (message) => {
+        if (message && message.action === "scanAllProgress") {
+          const page = message.page || 1;
+          const found = message.totalAccumulated || 0;
+          const pct = Math.min(95, page * 15);
+          updateStatus(
+            `Escaneando página ${page}... (${found} comprobantes acumulados)`,
+            pct
+          );
+          logDebug(`Página ${page}: ${message.foundInPage} en página, ${found} total acumulado.`);
+        }
+      };
+      chrome.runtime.onMessage.addListener(progressListener);
+
+      try {
+        logDebug("Iniciando escaneo multi-página vía content script...");
+        try {
+          const response = await chrome.tabs.sendMessage(tab.id, {
+            action: "scanAllPages",
+          });
+          chrome.runtime.onMessage.removeListener(progressListener);
+
+          if (response && response.invoices) {
+            logDebug(
+              `Escaneo completado. Encontradas: ${response.invoices.length} en ${response.totalPages || 1} páginas.`
+            );
+            if (response.origenConsulta && response.origenConsulta !== "DESCONOCIDO") {
+              currentOrigenConsulta = response.origenConsulta;
+            }
+            if (response.error) {
+              updateStatus(response.error, 0, true);
+            }
+            handleScanResult(response.invoices);
+            return;
+          }
+        } catch (msgError) {
+          logDebug("Mensajería falló para multi-página: " + msgError.message);
+        }
+
+        // Respaldo de inyección directa para página actual si no responde el content script
+        updateStatus("Escaneando página actual (modo directo)...", 10);
+        const injectionResults = await chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          func: extractInvoicesFromPage,
+        });
+
+        let foundInvoices = [];
+        for (const frameResult of injectionResults) {
+          if (
+            frameResult.result &&
+            frameResult.result.invoices &&
+            frameResult.result.invoices.length > 0
+          ) {
+            foundInvoices = foundInvoices.concat(frameResult.result.invoices);
+            if (
+              frameResult.result.origenConsulta &&
+              frameResult.result.origenConsulta !== "DESCONOCIDO"
+            ) {
+              currentOrigenConsulta = frameResult.result.origenConsulta;
+            }
+          }
+        }
+
+        if (foundInvoices.length > 0) {
+          const uniqueInvoices = Array.from(
+            new Map(foundInvoices.map((item) => [item.numero, item])).values()
+          );
+          handleScanResult(uniqueInvoices);
+        } else {
+          updateStatus("No se encontraron facturas.", 0, true);
+        }
+      } catch (error) {
+        console.error("Error fatal en escaneo multi-página:", error);
+        updateStatus("Error en escaneo multi-página.", 0, true);
+        logDebug("Error: " + error.message);
+      } finally {
+        chrome.runtime.onMessage.removeListener(progressListener);
+      }
+    });
+  }
 
   // ─── Procesamiento de Resultados ─────────────────────────────────────
 
@@ -459,6 +560,8 @@ document.addEventListener("DOMContentLoaded", function () {
               importeTotal,
               xmlLinkId,
               origenConsulta,
+              rowIndex: index,
+              pageIndex: 1,
             });
           }
         } catch (e) {
