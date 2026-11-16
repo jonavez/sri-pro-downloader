@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
 /* ─── Tokens de Diseño ────────────────────────────────────────────────── */
 
 :root {
@@ -829,3 +827,10 @@ body {
   color: #075985;
   border: 1px solid #bae6fd;
 }
+
+/* Marca oficial y accesibilidad */
+.brand-logo { display: block; object-fit: contain; margin: 0 0 12px; }
+.brand-logo--header { margin: 0 auto 8px; }
+.privacy-notice { font-size: 12px; line-height: 1.6; color: var(--text-light); }
+.privacy-notice a { color: var(--primary); }
+:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }

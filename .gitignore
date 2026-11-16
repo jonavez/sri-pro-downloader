@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.xml
+*.csv
+node_modules/
+dist/
+.DS_Store

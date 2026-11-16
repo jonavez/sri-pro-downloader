@@ -42,3 +42,16 @@ export function generateFilename(invoice, format = 'RUC_FECHA_SECUENCIAL') {
 export function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+/** Convierte importes del portal con separadores latinos o decimales de punto. */
+export function parseSriAmount(value) {
+  let text = String(value ?? "0").replace(/[$\s]/g, "");
+  if (text.includes(",") && text.includes(".")) {
+    text = text.lastIndexOf(",") > text.lastIndexOf(".")
+      ? text.replace(/\./g, "").replace(",", ".") : text.replace(/,/g, "");
+  } else if (text.includes(",")) {
+    text = text.replace(",", ".");
+  }
+  const amount = Number(text);
+  return Number.isFinite(amount) ? amount : 0;
+}

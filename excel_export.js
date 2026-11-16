@@ -22,18 +22,23 @@ export function convertToCSV(invoices) {
   ];
 
   // Crear filas
+  const cell = (value) => {
+    let text = String(value ?? "");
+    if (/^[\s\u0000-\u001f]*[=+@-]/.test(text)) text = "\'" + text;
+    return '"' + text.replace(/"/g, '""') + '"';
+  };
   const rows = invoices.map(inv => [
-    `"${inv.numero}"`,
-    `"${inv.ruc}"`,
-    `"${inv.razonSocial}"`,
-    `"${inv.tipoSerie}"`,
-    `"${inv.fechaEmision}"`,
-    `"${inv.fechaAutorizacion}"`,
-    `"${inv.claveAcceso}"`,
-    `"${inv.valorSinImpuestos}"`,
-    `"${inv.iva}"`,
-    `"${inv.importeTotal}"`
-  ]);
+    inv.numero,
+    inv.ruc,
+    inv.razonSocial,
+    inv.tipoSerie,
+    inv.fechaEmision,
+    inv.fechaAutorizacion,
+    inv.claveAcceso,
+    inv.valorSinImpuestos,
+    inv.iva,
+    inv.importeTotal
+  ].map(cell));
 
   // Unir todo
   return [
@@ -54,4 +59,5 @@ export function downloadCSV(csvContent, filename = 'reporte_facturas.csv') {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -1,0 +1,13 @@
+{
+  "name": "sri-pro-xml",
+  "version": "3.6.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tests/browser-smoke.cjs",
+    "package": "python3 scripts/package.py"
+  },
+  "engines": { "node": ">=24" },
+  "devDependencies": { "playwright": "1.65.1" }
+}

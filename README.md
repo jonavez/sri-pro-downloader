@@ -1,100 +1,48 @@
-# SRI Pro Downloader
+# SRI Pro XML 3.6.0
 
-**SRI Pro Downloader** es una extension profesional para Google Chrome (v3.5.0) disenada para facilitar la descarga masiva, gestion y sincronizacion automatizada de comprobantes electronicos (XML) tanto emitidos como recibidos desde el portal del SRI en Linea (Ecuador) hacia la plataforma de facturacion en la nube **EMITE.ec**.
+Extensión Chrome Manifest V3 para descargar comprobantes XML de consultas del SRI Ecuador y sincronizarlos, por solicitud del usuario, con su empresa en EMITE.ec. Herramienta independiente, sin afiliación oficial con el SRI.
 
----
+## Uso
 
-## Caracteristicas (v3.5.0)
+1. Carga esta carpeta desde `chrome://extensions` con el modo de desarrollador activado.
+2. Inicia sesión directamente en `https://srienlinea.sri.gob.ec/` y consulta comprobantes recibidos o emitidos.
+3. Abre la extensión y escanea la página actual o todas las páginas. El recorrido tiene un máximo de 50 páginas: reduce el período de consulta si lo superas.
+4. Descarga los XML o exporta el CSV. Mantén abierta la pestaña del SRI durante las operaciones. Las descargas continúan al cerrar el popup.
+5. Para sincronizar, guarda la API Key de tu empresa, prueba la conexión y comprueba la empresa mostrada antes de pulsar Sincronizar. Sólo se permite `https://api.emite.ec`.
 
-- **Escanear Todas las Paginas (Multi-Pagina)**: Crawler inteligente que recorre iterativamente el paginador de PrimeFaces del SRI, recolectando y deduplicando cientos de facturas en todas las paginas con feedback en tiempo real.
-- **Sincronizacion en 1 Clic con EMITE.ec**: Sincroniza directamente todos tus comprobantes consultados en el SRI hacia tu empresa en EMITE.ec sin necesidad de descargar archivos a tu disco local.
-- **Extraccion de XML Ultra-Resiliente**: Envio de solicitudes JSF urlencoded nativas desde la sesion autenticada del navegador, garantizando la obtencion directa del XML y eliminando dependencias de servicios SOAP externos.
-- **Navegacion Asistida durante la Ingesta**: Para consultas multi-pagina, la extension posiciona la vista de la tabla en la pagina adecuada para extraer el XML en milisegundos antes del envio a la API.
-- **Deteccion Inteligente de Duplicadas**: Algoritmo diferencial en dos fases (Pre-check) que consulta la base de datos de EMITE.ec y omite facturas previamente registradas, ahorrando ancho de banda y tiempo.
-- **Deteccion de Facturas Anuladas**: Identifica comprobantes marcados como anulados o cancelados en el SRI y actualiza su estado en EMITE.ec de forma automatizada.
-- **Clasificacion de Notas de Credito**: Identifica notas de credito (`cod_doc = '04'`), asociandolas con el comprobante sustento correspondiente de forma no destructiva.
-- **Soporte Multicomprobante**: Facturas (`01`), Liquidaciones de compra (`03`), Notas de credito (`04`), Notas de debito (`05`), Guias de remision (`06`) y Retenciones (`07`).
-- **Descarga Masiva a Disco**: Descarga multiples facturas XML con un solo clic si prefieres guardarlas localmente.
-- **Renombrado Inteligente**: Guarda tus archivos automaticamente con el formato `RUC_FECHA_SECUENCIAL.xml` para contabilidad organizada.
-- **Exportacion a Excel (CSV)**: Genera reportes CSV de tus comprobantes al instante.
-- **Robustez con Regex de 49 Digitos**: Extrae claves de acceso desacopladas de indices rigidos de celda en PrimeFaces.
-- **Seguridad ISO/IEC 27001**: Autenticacion segura mediante API Key (`X-API-Key`), almacenamiento en `storage.local` y validacion estricta de aislamiento multi-tenant.
-- **Arquitectura Elephant-Goldfish Model (EGM)**: Diseno y especificaciones auditadas bajo el estandar formal de Google EGM (`docs/designs/`).
+La sincronización utiliza pre-check diferencial y lotes de hasta tres XML de una misma página. Si el XML no se obtiene desde el navegador, el comprobante queda fallido para reintentar; no se dispara automáticamente una consulta SOAP. Ante una interrupción de Chrome se conserva el último resultado y se solicita volver a escanear y sincronizar. El backend comprueba duplicados al reintentar. No se promete latencia fija ni éxito del 100 %: ambos dependen del portal, la sesión, la red y el servidor.
 
----
+## Privacidad y permisos
 
-## Instalacion
+Consulta [la política de privacidad](privacy.html). La API Key permanece en almacenamiento local del perfil, sin cifrado adicional; el acceso desde content scripts está restringido. No se usa Chrome Sync ni analítica. Las credenciales y los resultados locales pueden borrarse desde el popup. Esto no elimina archivos descargados ni registros enviados a EMITE.
 
-1. Descarga el codigo de este repositorio (ZIP) o clonalo:
-   ```bash
-   git clone https://github.com/jonavez/sri-pro-downloader.git
-   ```
-2. Abre Google Chrome y ve a `chrome://extensions/`.
-3. Activa el **"Modo de desarrollador"** en la esquina superior derecha (interruptor azul).
-4. Haz clic en el boton **"Cargar descomprimida"** (Load unpacked).
-5. Selecciona la carpeta donde descargaste este proyecto.
+- `activeTab` y `scripting`: localizar la consulta e inicializar el script en el frame correcto tras una acción del usuario.
+- `downloads`: iniciar descargas XML y asignar nombres.
+- `storage`: configuración, credenciales locales y último resultado.
+- Hosts: exclusivamente el portal HTTPS `srienlinea.sri.gob.ec` y `api.emite.ec`.
 
----
+## Verificación y entrega
 
-## Como Usar
+```sh
+npm ci --ignore-scripts
+node --test tests/*.test.mjs
+npx playwright install chromium
+npm run test:browser
+python3 scripts/scan_secrets.py
+python3 scripts/package.py
+```
 
-### 1. Sincronizar Directamente con EMITE.ec (Recomendado)
+El ZIP de `dist/` incluye sólo archivos de ejecución y logos; excluye historial Git, documentación de desarrollo, pruebas, credenciales e informes. Revisa [el informe de auditoría](docs/AUDIT-2026-11-16.md) y [los requisitos de publicación](docs/CHROME-STORE.md) antes de enviar a la tienda. La versión 3.6.0 supera la del repositorio auditado (3.5.0); debe contrastarse con el Dashboard antes del envío.
 
-1. Haz clic en el icono de engranaje en la extension.
-2. En la seccion **Plataforma EMITE.ec**:
-   - Ingresa la URL de la API (por defecto: `https://api.emite.ec`).
-   - Pega la **API Key** de tu empresa generada en EMITE.ec.
-   - Presiona **"Probar Conexion"** para verificar el enlace con tu razon social.
-   - Presiona **"Guardar"**.
-3. Ingresa al portal del [SRI en Linea](https://srienlinea.sri.gob.ec/) -> Facturacion Electronica -> Comprobantes Recibidos.
-4. Realiza tu consulta (por mes, anio, dia, etc.) y presiona "Consultar".
-5. Abre la extension **SRI Pro Downloader**, presiona **"Escanear Pagina Actual"** y haz clic en **"Sincronizar con EMITE.ec"**.
-6. Observa la barra de progreso y la tarjeta de resultados: veras exactamente cuantas facturas nuevas fueron sincronizadas, cuantas duplicadas fueron omitidas y cuantas anuladas fueron detectadas.
+Se toman como referencia ISO/IEC 27001:2022, ISO/IEC 25010:2023 e ISO 9241-210. No se declara certificación ISO ni aprobación de Chrome Web Store. Los controles de código no constituyen por sí solos un sistema de gestión certificado.
 
-### 2. Descargar XMLs Localmente
+## nuro y EMITE.ec
 
-- Presiona **"Descargar XMLs"** para bajar los archivos de la pagina actual a tu carpeta configurada de descargas.
-- O usa **"Descargar Todas las Paginas"** para que la extension navegue automaticamente por todas las paginas de resultados.
-- Presiona **"Exportar a Excel (CSV)"** para generar una hoja de calculo con los montos e impuestos detallados.
+[nuro](https://nuro.ec) es la empresa detrás de este proyecto y de [EMITE.ec](https://emite.ec), la plataforma de facturación electrónica con la que se integra la extensión.
 
----
+- [nuro.ec](https://nuro.ec): conoce la empresa y sus soluciones tecnológicas.
+- [emite.ec](https://emite.ec): accede a la plataforma de facturación electrónica.
 
-## Documentacion y Especificaciones EGM
+Los logos EMITE.ec se reutilizan de los recursos oficiales públicos del producto, con variantes para fondos claros y oscuros. No contienen datos de configuración del servidor.
 
-Las especificaciones tecnicas completas y los contratos de API auditados por la suite de revisores EGM se encuentran en:
-- [docs/designs/sincronizacion_emite.md](docs/designs/sincronizacion_emite.md)
-- [docs/designs/SITEMAP.md](docs/designs/SITEMAP.md)
-
----
-
-## Contribuye
-
-Si esta herramienta te ha sido util y te ha ahorrado tiempo en tus declaraciones de impuestos:
-
-- **Dale una estrella** a este repositorio.
-- Si encuentras un error, abre un [Issue](https://github.com/jonavez/sri-pro-downloader/issues).
-
----
-
-## Redes Sociales
-
-Siguenos en nuestras redes sociales como **nurolatam**:
-
-- [Facebook](https://facebook.com/nurolatam)
-- [Instagram](https://instagram.com/nurolatam)
-- [X (Twitter)](https://x.com/nurolatam)
-- [TikTok](https://tiktok.com/@nurolatam)
-- [LinkedIn](https://linkedin.com/company/nurolatam)
-- [YouTube](https://youtube.com/@nurolatam)
-
----
-
-## Contacto
-
-- **GitHub**: [Jonathan Chavez](https://github.com/jonavez)
-- **WhatsApp**: [+593 958 900 756](https://wa.me/593958900756)
-- **Web**: [https://nuro.ec](https://nuro.ec)
-
----
-
-Desarrollado por [Jonathan Chavez](https://github.com/jonavez) | [nuro](https://nuro.ec)
+Desarrollo: [nuro](https://nuro.ec). Soporte: [WhatsApp](https://wa.me/593958900756). No publiques XML, identificaciones tributarias reales ni API Keys en incidencias públicas.

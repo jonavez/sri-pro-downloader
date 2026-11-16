@@ -1,3 +1,14 @@
+(() => {
+if (globalThis.__sriProLoaded) return;
+globalThis.__sriProLoaded = true;
+let portalBusy = false;
+let syncLeaseUntil = 0;
+
+async function withPortalLock(operation) {
+  if (portalBusy) throw new Error("Hay otra operación en el portal. Espera a que termine.");
+  portalBusy = true;
+  try { return await operation(); } finally { portalBusy = false; }
+}
 // content.js - Logica de extraccion e interaccion con la pagina (v3.2)
 
 /**
@@ -69,7 +80,7 @@ function detectarOrigenConsulta() {
   return "DESCONOCIDO";
 }
 
-function extractInvoiceData(pageIndex = 1) {
+function extractInvoiceData(pageIndex = getActivePage()) {
   const logs = [];
   const log = (msg) => {
     console.log(msg);
@@ -315,7 +326,7 @@ function extractInvoiceData(pageIndex = 1) {
 // Simular clic y manejar descarga
 async function downloadSingleXML(linkId, filename) {
   const link = document.getElementById(linkId);
-  if (!link) return false;
+  if (!link) throw new Error("No se encontró el enlace XML en la página actual");
 
   if (filename) {
     try {
@@ -331,11 +342,12 @@ async function downloadSingleXML(linkId, filename) {
   const href = link.getAttribute("href");
 
   if (href && href !== "#" && !href.startsWith("javascript:")) {
-    chrome.runtime.sendMessage({
+    const result = await chrome.runtime.sendMessage({
       action: "downloadFile",
       url: link.href,
       filename: filename,
     });
+    if (!result?.success) throw new Error(result?.error || "No se inició la descarga");
   } else {
     link.click();
   }
@@ -344,25 +356,38 @@ async function downloadSingleXML(linkId, filename) {
   return true;
 }
 
-function isLikelySRIXml(text) {
-  if (!text || typeof text !== "string") return false;
-  const lower = text.toLowerCase();
-  return (
-    lower.includes("<?xml") ||
-    lower.includes("<factura") ||
-    lower.includes("<comprobante") ||
-    lower.includes("<autorizacion") ||
-    lower.includes("<notacredito") ||
-    lower.includes("<notadebito") ||
-    lower.includes("<comprobanteretencion") ||
-    lower.includes("<liquidacioncompra") ||
-    lower.includes("<guiaremision")
-  );
+function isLikelySRIXml(text, expectedKey) {
+  if (typeof text !== "string" || text.length > 2 * 1024 * 1024 || /<!DOCTYPE|<!ENTITY/i.test(text)) return false;
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.querySelector("parsererror")) return false;
+  const allowed = ["factura", "autorizacion", "RespuestaAutorizacionComprobante", "notaCredito",
+    "notaDebito", "comprobanteRetencion", "liquidacionCompra", "guiaRemision"];
+  if (!allowed.includes(doc.documentElement.localName)) return false;
+  if (expectedKey) {
+    let invoiceDoc = doc;
+    const embedded = Array.from(doc.getElementsByTagName("*")).find((el) => el.localName === "comprobante");
+    if (embedded) {
+      const inner = embedded.textContent.trim();
+      if (/<!DOCTYPE|<!ENTITY/i.test(inner)) return false;
+      invoiceDoc = new DOMParser().parseFromString(inner, "application/xml");
+      if (invoiceDoc.querySelector("parsererror")) return false;
+    }
+    const keys = Array.from(invoiceDoc.getElementsByTagName("*")).filter((el) => el.localName === "claveAcceso");
+    if (keys.length !== 1 || keys[0].textContent.trim() !== expectedKey) return false;
+  }
+  return true;
+}
+
+async function fetchSri(url, options = {}) {
+  const target = new URL(url, location.href);
+  if (target.origin !== location.origin || target.protocol !== "https:") throw new Error("Destino XML no permitido");
+  return fetch(target.href, { ...options, credentials: "include", redirect: "error", signal: AbortSignal.timeout(15000) });
 }
 
 // Obtiene el contenido XML en memoria aprovechando la sesion activa del portal SRI
 async function fetchXMLContent(linkId, claveAcceso = null) {
   let link = linkId ? document.getElementById(linkId) : null;
+  if (link && claveAcceso && !link.closest("tr")?.textContent.includes(claveAcceso)) link = null;
 
   // Si no se encuentra por linkId, buscar en la fila que contiene la clave de acceso
   if (!link && claveAcceso) {
@@ -388,10 +413,10 @@ async function fetchXMLContent(linkId, claveAcceso = null) {
   const href = link.getAttribute("href");
   if (href && href !== "#" && !href.startsWith("javascript:")) {
     try {
-      const res = await fetch(link.href, { credentials: "include" });
+      const res = await fetchSri(link.href);
       if (res.ok) {
         const text = await res.text();
-        if (isLikelySRIXml(text)) {
+        if (isLikelySRIXml(text, claveAcceso)) {
           return text.trim();
         }
       }
@@ -450,10 +475,8 @@ async function fetchXMLContent(linkId, claveAcceso = null) {
       }
 
       const actionUrl = form.action || window.location.href;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
 
-      const res = await fetch(actionUrl, {
+      const res = await fetchSri(actionUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
@@ -461,13 +484,11 @@ async function fetchXMLContent(linkId, claveAcceso = null) {
         },
         body: params.toString(),
         credentials: "include",
-        signal: controller.signal,
       });
-      clearTimeout(timer);
 
       if (res.ok) {
         const text = await res.text();
-        if (isLikelySRIXml(text)) {
+        if (isLikelySRIXml(text, claveAcceso)) {
           return text.trim();
         }
       }
@@ -485,78 +506,51 @@ function hasNextPage() {
   return nextBtn && !nextBtn.classList.contains("ui-state-disabled");
 }
 
-async function waitForTableUpdate() {
-  const firstRowBefore = document.querySelector("tr[data-ri]");
-  const beforeKey = firstRowBefore
-    ? (firstRowBefore.getAttribute("data-ri") + "_" + (firstRowBefore.textContent || "").substring(0, 40))
-    : "";
+function getActivePage() {
+  const active = document.querySelector(".ui-paginator-page.ui-state-active");
+  return active ? Number.parseInt(active.textContent.trim(), 10) : 1;
+}
 
-  const start = Date.now();
-  while (Date.now() - start < 3500) {
-    await new Promise((r) => setTimeout(r, 200));
-    const firstRowNow = document.querySelector("tr[data-ri]");
-    const currentKey = firstRowNow
-      ? (firstRowNow.getAttribute("data-ri") + "_" + (firstRowNow.textContent || "").substring(0, 40))
-      : "";
-    if (firstRowNow && currentKey !== beforeKey) {
-      await new Promise((r) => setTimeout(r, 300));
-      return true;
-    }
+function tableFingerprint() {
+  return Array.from(document.querySelectorAll("tr[data-ri]")).map((r) => r.textContent).join("|");
+}
+
+async function waitForTableUpdate(before, expectedPage) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (tableFingerprint() !== before && document.querySelector("tr[data-ri]") &&
+        (expectedPage === undefined || getActivePage() === expectedPage)) return true;
   }
-  return true;
+  throw new Error("El SRI no confirmó el cambio de página. Vuelve a consultar antes de continuar.");
+}
+
+async function clickPage(button, expectedPage) {
+  const before = tableFingerprint();
+  button.click();
+  return waitForTableUpdate(before, expectedPage);
 }
 
 async function goToNextPage() {
-  const nextBtn = document.querySelector(".ui-paginator-next");
-  if (!nextBtn || nextBtn.classList.contains("ui-state-disabled")) return false;
-
-  nextBtn.click();
-  await waitForTableUpdate();
-  return true;
+  const next = document.querySelector(".ui-paginator-next:not(.ui-state-disabled)");
+  if (!next) return false;
+  return clickPage(next, getActivePage() + 1);
 }
 
-/**
- * Navega a una pagina especifica del paginador de PrimeFaces.
- *
- * @async
- * @param {number} targetPage - Numero de pagina (1-based).
- * @returns {Promise<boolean>}
- */
 async function goToPage(targetPage) {
-  if (!targetPage || targetPage < 1) return false;
-
-  const getActivePage = () => {
-    const activeBtn = document.querySelector(".ui-paginator-page.ui-state-active");
-    return activeBtn ? parseInt(activeBtn.textContent.trim(), 10) : 1;
-  };
-
-  let current = getActivePage();
-  if (current === targetPage) return true;
-
-  if (targetPage === 1) {
-    const firstBtn = document.querySelector(".ui-paginator-first:not(.ui-state-disabled)");
-    if (firstBtn) {
-      firstBtn.click();
-      await waitForTableUpdate();
-      return true;
-    }
+  if (!Number.isInteger(targetPage) || targetPage < 1 || targetPage > 10000) return false;
+  if (getActivePage() === targetPage) return true;
+  if (targetPage < getActivePage()) {
+    const first = document.querySelector(".ui-paginator-first:not(.ui-state-disabled)");
+    if (!first) return false;
+    await clickPage(first, 1);
   }
-
-  const pageBtns = document.querySelectorAll(".ui-paginator-pages .ui-paginator-page");
-  for (const btn of pageBtns) {
-    if (btn.textContent.trim() === String(targetPage)) {
-      btn.click();
-      await waitForTableUpdate();
-      return true;
-    }
+  for (let attempt = 0; attempt < 10000 && getActivePage() < targetPage; attempt++) {
+    const direct = Array.from(document.querySelectorAll(".ui-paginator-page"))
+      .find((button) => Number(button.textContent.trim()) === targetPage);
+    if (direct) return clickPage(direct, targetPage);
+    if (!await goToNextPage()) return false;
   }
-
-  while (current < targetPage && hasNextPage()) {
-    await goToNextPage();
-    current = getActivePage();
-    if (current === targetPage) return true;
-  }
-
   return getActivePage() === targetPage;
 }
 
@@ -575,8 +569,7 @@ async function scanAllPages() {
   // Intentar regresar a la primera pagina si no estamos en ella
   const firstBtn = document.querySelector(".ui-paginator-first:not(.ui-state-disabled)");
   if (firstBtn) {
-    firstBtn.click();
-    await waitForTableUpdate();
+    await clickPage(firstBtn, 1);
   }
 
   let currentPage = 1;
@@ -608,6 +601,7 @@ async function scanAllPages() {
     } catch (e) {}
 
     if (hasNextPage()) {
+      if (currentPage === maxPages) throw new Error("Consulta superior a 50 páginas. Reduce el período para evitar resultados incompletos.");
       const moved = await goToNextPage();
       if (!moved) break;
       currentPage++;
@@ -620,8 +614,7 @@ async function scanAllPages() {
   try {
     const returnFirst = document.querySelector(".ui-paginator-first:not(.ui-state-disabled)");
     if (returnFirst) {
-      returnFirst.click();
-      await waitForTableUpdate();
+      await clickPage(returnFirst, 1);
     }
   } catch (e) {}
 
@@ -636,12 +629,27 @@ async function scanAllPages() {
 // ─── Listeners de Mensajes ─────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return false;
+  if (syncLeaseUntil && syncLeaseUntil < Date.now()) { portalBusy = false; syncLeaseUntil = 0; }
+  if (request.action === "reserveSync") {
+    if (portalBusy) { sendResponse({ success: false }); return false; }
+    portalBusy = true;
+    syncLeaseUntil = Date.now() + 60000;
+    sendResponse({ success: true });
+    return false;
+  }
+  if (request.action === "releaseSync") {
+    if (syncLeaseUntil) { portalBusy = false; syncLeaseUntil = 0; }
+    sendResponse({ success: true });
+    return false;
+  }
+  if (syncLeaseUntil && ["goToPage", "fetchComprobanteXml"].includes(request.action)) syncLeaseUntil = Date.now() + 60000;
   if (request.action === "extractInvoices") {
-    sendResponse(extractInvoiceData(1));
+    sendResponse(extractInvoiceData());
   }
 
   if (request.action === "scanAllPages") {
-    scanAllPages()
+    withPortalLock(scanAllPages)
       .then((res) => sendResponse(res))
       .catch((err) => sendResponse({ error: err.message, invoices: [] }));
     return true;
@@ -656,7 +664,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "downloadSingleXML") {
     downloadSingleXML(request.linkId, request.filename)
-      .then(() => sendResponse({ success: true }))
+      .then((success) => sendResponse({ success }))
       .catch((e) => sendResponse({ success: false, error: e.message }));
     return true;
   }
@@ -668,44 +676,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === "downloadAllPages") {
-    processAllPages();
+  if (["downloadAllPages", "downloadInvoices"].includes(request.action)) {
+    if (portalBusy) { sendResponse({ started: false, error: "Espera a que termine la operación del portal" }); return false; }
+    withPortalLock(() => request.action === "downloadAllPages" ? processAllPages() : processProvidedInvoices(request.invoices)).catch((error) => chrome.runtime.sendMessage({ action: "downloadError", error: error.message }));
     sendResponse({ started: true });
   }
 });
+
+async function processProvidedInvoices(invoices) {
+  if (!Array.isArray(invoices) || invoices.length > 10000) throw new Error("Lista de comprobantes no válida");
+  let current = 0;
+  for (const invoice of invoices) {
+    if (!await goToPage(invoice.pageIndex || 1)) throw new Error("No se pudo confirmar la página del XML");
+    const { filename } = await chrome.runtime.sendMessage({ action: "getDownloadFilename", invoice });
+    await downloadSingleXML(invoice.xmlLinkId, filename);
+    chrome.runtime.sendMessage({ action: "updateProgress", current: ++current, total: invoices.length });
+  }
+}
 
 async function processAllPages() {
   let page = 1;
   let totalProcessed = 0;
 
-  let utils;
-  try {
-    utils = await import(chrome.runtime.getURL("utils.js"));
-  } catch (e) {
-    console.error("Error importando utils:", e);
-  }
-
-  let downloadFolder = "";
-  try {
-    const storage = await chrome.storage.local.get(["downloadFolder"]);
-    downloadFolder = storage.downloadFolder || "";
-  } catch (e) {
-    console.warn("Error leyendo storage:", e);
-  }
-
+  if (!await goToPage(1)) throw new Error("No se pudo volver a la primera página");
   while (true) {
     const data = extractInvoiceData();
     const invoices = data.invoices;
 
     for (let i = 0; i < invoices.length; i++) {
-      let filename = "";
-      if (utils) {
-        filename = utils.generateFilename(invoices[i]);
-        if (downloadFolder) {
-          filename = `${downloadFolder}/${filename}`;
-        }
-      }
-
+      const { filename } = await chrome.runtime.sendMessage({ action: "getDownloadFilename", invoice: invoices[i] });
       await downloadSingleXML(invoices[i].xmlLinkId, filename);
       totalProcessed++;
 
@@ -717,6 +716,7 @@ async function processAllPages() {
     }
 
     if (hasNextPage()) {
+      if (page >= 50) throw new Error("Consulta superior a 50 páginas. Reduce el período de consulta.");
       await goToNextPage();
       page++;
     } else {
@@ -730,3 +730,6 @@ async function processAllPages() {
     total: totalProcessed,
   });
 }
+
+globalThis.__sriProApi = { extract: extractInvoiceData };
+})();

@@ -1,11 +1,17 @@
 // popup.js — Lógica principal del popup de SRI Pro XML (v3.3)
 
 import { convertToCSV, downloadCSV } from "./excel_export.js";
-import { generateFilename } from "./utils.js";
+import { parseSriAmount } from "./utils.js";
 import { injectIcons } from "./icons.js";
-import { testConnection } from "./emite_sync.js";
+import { normalizeApiUrl, testConnection } from "./emite_sync.js";
 
 document.addEventListener("DOMContentLoaded", function () {
+  document.getElementById("clearDataBtn").addEventListener("click", async () => {
+    const { emiteSyncState } = await chrome.storage.local.get("emiteSyncState");
+    if (emiteSyncState?.status === "IN_PROGRESS") { updateStatus("Espera a que termine la sincronización para borrar sus datos.", 0, true); return; }
+    await chrome.storage.local.clear();
+    location.reload();
+  });
   // Inyectar íconos SVG en los botones
   injectIcons();
 
@@ -92,192 +98,48 @@ document.addEventListener("DOMContentLoaded", function () {
     chrome.storage.local.remove(["lastEmiteSyncResult", "emiteSyncState"]);
   }
 
-  // ─── Escanear Facturas ───────────────────────────────────────────────
+  let scannedTabId = null;
+  let scannedFrameId = 0;
 
-  scanBtn.addEventListener("click", async () => {
-    resetPreviousData();
-    updateStatus("Escaneando página actual...", 5);
-    clearDebug();
-
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
-
-    if (!tab) {
-      updateStatus("Error: No se detectó pestaña activa", 0, true);
+  async function scan(allPages) {
+    const { emiteSyncState } = await chrome.storage.local.get("emiteSyncState");
+    if (emiteSyncState?.status === "IN_PROGRESS") {
+      updateStatus("Espera a que termine la sincronización antes de escanear.", 0, true);
       return;
     }
-
+    resetPreviousData();
+    clearDebug();
+    scanBtn.disabled = scanAllBtn.disabled = true;
     try {
-      logDebug("v3.2: Intentando comunicacion via mensaje...");
-      try {
-        const response = await chrome.tabs.sendMessage(tab.id, {
-          action: "extractInvoices",
-        });
-        if (response) {
-          logDebug("Respuesta recibida.");
-          if (response.logs) response.logs.forEach((l) => logDebug(l));
-          if (response.origenConsulta) {
-            currentOrigenConsulta = response.origenConsulta;
-            logDebug(`Origen detectado: ${currentOrigenConsulta}`);
-          }
-
-          if (response.error) {
-            logDebug("Error: " + response.error);
-            updateStatus(response.error, 0, true);
-          }
-          handleScanResult(response.invoices);
-          return;
-        }
-      } catch (msgError) {
-        logDebug("Mensajería falló: " + msgError.message);
-        logDebug("Intentando inyección directa...");
-      }
-
-      // Fallback: Inyección directa en todos los frames
-      const injectionResults = await chrome.scripting.executeScript({
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.url?.startsWith("https://srienlinea.sri.gob.ec/")) throw new Error("Abre tu consulta en el portal oficial del SRI.");
+      await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["content.js"] });
+      const probes = await chrome.scripting.executeScript({
         target: { tabId: tab.id, allFrames: true },
-        func: extractInvoicesFromPage,
+        func: () => globalThis.__sriProApi?.extract(),
       });
-
-      let foundInvoices = [];
-      for (const frameResult of injectionResults) {
-        if (
-          frameResult.result &&
-          frameResult.result.invoices &&
-          frameResult.result.invoices.length > 0
-        ) {
-          foundInvoices = foundInvoices.concat(frameResult.result.invoices);
-          if (frameResult.result.origenConsulta && frameResult.result.origenConsulta !== "DESCONOCIDO") {
-            currentOrigenConsulta = frameResult.result.origenConsulta;
-          }
-          if (frameResult.result.logs)
-            frameResult.result.logs.forEach((l) => logDebug("[Inj] " + l));
-        } else if (frameResult.result && frameResult.result.logs) {
-          frameResult.result.logs.forEach((l) => logDebug("[Inj] " + l));
-        }
-      }
-
-      logDebug(`Inyeccion completada. Encontradas: ${foundInvoices.length} (${currentOrigenConsulta})`);
-
-      if (foundInvoices.length > 0) {
-        // Eliminar duplicados por numero de factura
-        const uniqueInvoices = Array.from(
-          new Map(foundInvoices.map((item) => [item.numero, item])).values()
-        );
-        handleScanResult(uniqueInvoices);
-      } else {
-        updateStatus("No se encontraron facturas.", 0, true);
-        logDebug("Sugerencia: Expande la tabla a 50 filas.");
-      }
+      const frame = probes.find((probe) => probe.result?.invoices?.length);
+      if (!frame) throw new Error("No se encontraron comprobantes. Realiza una consulta en el SRI.");
+      scannedTabId = tab.id;
+      scannedFrameId = frame.frameId;
+      updateStatus(allPages ? "Escaneando todas las páginas..." : "Leyendo comprobantes...", 10);
+      const response = allPages ? await chrome.tabs.sendMessage(tab.id, { action: "scanAllPages" }, { frameId: scannedFrameId }) : frame.result;
+      if (response?.error) throw new Error(response.error);
+      currentOrigenConsulta = response.origenConsulta || "DESCONOCIDO";
+      handleScanResult(response.invoices);
     } catch (error) {
-      console.error("Error fatal:", error);
-      updateStatus("Error crítico. Ver log abajo.", 0, true);
-      logDebug("Error: " + error.message);
-      debugLog.classList.remove("hidden");
+      updateStatus(error.message, 0, true);
+    } finally {
+      scanBtn.disabled = scanAllBtn.disabled = false;
     }
-  });
-
-  // ─── Escanear Todas las Páginas (Multi-Página) ──────────────────────
-
-  if (scanAllBtn) {
-    scanAllBtn.addEventListener("click", async () => {
-      resetPreviousData();
-      updateStatus("Iniciando escaneo de todas las páginas...", 5);
-      clearDebug();
-
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
-
-      if (!tab) {
-        updateStatus("Error: No se detectó pestaña activa", 0, true);
-        return;
-      }
-
-      // Escuchar progreso en vivo del crawler multi-página
-      const progressListener = (message) => {
-        if (message && message.action === "scanAllProgress") {
-          const page = message.page || 1;
-          const found = message.totalAccumulated || 0;
-          const pct = Math.min(95, page * 15);
-          updateStatus(
-            `Escaneando página ${page}... (${found} comprobantes acumulados)`,
-            pct
-          );
-          logDebug(`Página ${page}: ${message.foundInPage} en página, ${found} total acumulado.`);
-        }
-      };
-      chrome.runtime.onMessage.addListener(progressListener);
-
-      try {
-        logDebug("Iniciando escaneo multi-página vía content script...");
-        try {
-          const response = await chrome.tabs.sendMessage(tab.id, {
-            action: "scanAllPages",
-          });
-          chrome.runtime.onMessage.removeListener(progressListener);
-
-          if (response && response.invoices) {
-            logDebug(
-              `Escaneo completado. Encontradas: ${response.invoices.length} en ${response.totalPages || 1} páginas.`
-            );
-            if (response.origenConsulta && response.origenConsulta !== "DESCONOCIDO") {
-              currentOrigenConsulta = response.origenConsulta;
-            }
-            if (response.error) {
-              updateStatus(response.error, 0, true);
-            }
-            handleScanResult(response.invoices);
-            return;
-          }
-        } catch (msgError) {
-          logDebug("Mensajería falló para multi-página: " + msgError.message);
-        }
-
-        // Respaldo de inyección directa para página actual si no responde el content script
-        updateStatus("Escaneando página actual (modo directo)...", 10);
-        const injectionResults = await chrome.scripting.executeScript({
-          target: { tabId: tab.id, allFrames: true },
-          func: extractInvoicesFromPage,
-        });
-
-        let foundInvoices = [];
-        for (const frameResult of injectionResults) {
-          if (
-            frameResult.result &&
-            frameResult.result.invoices &&
-            frameResult.result.invoices.length > 0
-          ) {
-            foundInvoices = foundInvoices.concat(frameResult.result.invoices);
-            if (
-              frameResult.result.origenConsulta &&
-              frameResult.result.origenConsulta !== "DESCONOCIDO"
-            ) {
-              currentOrigenConsulta = frameResult.result.origenConsulta;
-            }
-          }
-        }
-
-        if (foundInvoices.length > 0) {
-          const uniqueInvoices = Array.from(
-            new Map(foundInvoices.map((item) => [item.numero, item])).values()
-          );
-          handleScanResult(uniqueInvoices);
-        } else {
-          updateStatus("No se encontraron facturas.", 0, true);
-        }
-      } catch (error) {
-        console.error("Error fatal en escaneo multi-página:", error);
-        updateStatus("Error en escaneo multi-página.", 0, true);
-        logDebug("Error: " + error.message);
-      } finally {
-        chrome.runtime.onMessage.removeListener(progressListener);
-      }
-    });
   }
+  scanBtn.addEventListener("click", () => scan(false));
+  scanAllBtn.addEventListener("click", () => scan(true));
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    if (sender.tab?.id !== scannedTabId || sender.frameId !== scannedFrameId) return;
+    if (message.action === "scanAllProgress") updateStatus(`Página ${message.page}: ${message.totalAccumulated} comprobantes`, Math.min(95, message.page * 2));
+    if (message.action === "downloadError") updateStatus(message.error, 0, true);
+  });
 
   // ─── Procesamiento de Resultados ─────────────────────────────────────
 
@@ -312,271 +174,6 @@ document.addEventListener("DOMContentLoaded", function () {
     debugLog.classList.add("hidden");
   }
 
-  // ─── Funcion Inyectada v3.2 (misma logica robusta que content.js) ───
-  // NOTA: Esta funcion se inyecta en la pagina via chrome.scripting.executeScript
-  // y no puede importar modulos. Por eso la logica de extraccion esta duplicada.
-
-  function extractInvoicesFromPage() {
-    const logs = [];
-    const log = (msg) => {
-      console.log(msg);
-      logs.push(msg);
-    };
-
-    try {
-      // Detectar contexto emitidos vs recibidos (inline por inyeccion)
-      let origenConsulta = "DESCONOCIDO";
-      const urlLower = (window.location.href || "").toLowerCase();
-      const titleLower = (document.title || "").toLowerCase();
-      if (urlLower.includes("emitido") || urlLower.includes("emitid")) {
-        origenConsulta = "EMITIDOS";
-      } else if (urlLower.includes("recibido") || urlLower.includes("recibid")) {
-        origenConsulta = "RECIBIDOS";
-      } else if (titleLower.includes("emitido") || titleLower.includes("emitid")) {
-        origenConsulta = "EMITIDOS";
-      } else if (titleLower.includes("recibido") || titleLower.includes("recibid")) {
-        origenConsulta = "RECIBIDOS";
-      } else {
-        const encabezados = document.querySelectorAll(
-          "h1, h2, h3, .ui-panel-title, .ui-fieldset-legend, span.ui-outputlabel"
-        );
-        for (const el of encabezados) {
-          const texto = (el.textContent || "").toLowerCase();
-          if (texto.includes("emitido") || texto.includes("emitid")) {
-            origenConsulta = "EMITIDOS";
-            break;
-          }
-          if (texto.includes("recibido") || texto.includes("recibid")) {
-            origenConsulta = "RECIBIDOS";
-            break;
-          }
-        }
-        if (origenConsulta === "DESCONOCIDO") {
-          const breadcrumbs = document.querySelectorAll(
-            ".ui-breadcrumb li, .ui-menuitem-text, .ui-menuitem-link"
-          );
-          for (const el of breadcrumbs) {
-            const texto = (el.textContent || "").toLowerCase();
-            if (texto.includes("emitido") || texto.includes("emitid")) {
-              origenConsulta = "EMITIDOS";
-              break;
-            }
-            if (texto.includes("recibido") || texto.includes("recibid")) {
-              origenConsulta = "RECIBIDOS";
-              break;
-            }
-          }
-        }
-        if (origenConsulta === "DESCONOCIDO") {
-          const columnas = document.querySelectorAll("th, .ui-column-title");
-          for (const col of columnas) {
-            const texto = (col.textContent || "").toLowerCase();
-            if (texto.includes("receptor") || texto.includes("comprador")) {
-              origenConsulta = "EMITIDOS";
-              break;
-            }
-            if (texto.includes("emisor") || texto.includes("proveedor")) {
-              origenConsulta = "RECIBIDOS";
-              break;
-            }
-          }
-        }
-      }
-      log(`Inj: Contexto detectado: ${origenConsulta}`);
-
-      const invoices = [];
-      // Selector robusto para filas PrimeFaces
-      let rows = document.querySelectorAll("tr[data-ri]");
-
-      if (rows.length === 0) {
-        log("Inj: tr[data-ri] no encontrados. Intentando genérico...");
-        rows = document.querySelectorAll("table tbody tr");
-        const filtered = [];
-        rows.forEach((r) => {
-          if (r.innerText && /\d{2}\/\d{2}\/\d{4}/.test(r.innerText))
-            filtered.push(r);
-        });
-        rows = filtered;
-      }
-
-      log(`Inj: Filas encontradas: ${rows.length}`);
-
-      if (rows.length === 0) {
-        return {
-          invoices: [],
-          count: 0,
-          logs: logs,
-          error: "No se encontró tabla de facturas.",
-        };
-      }
-
-      // Limpieza robusta de texto en celdas
-      const clean = (el) => {
-        if (!el) return "";
-        let html = el.innerHTML || "";
-        html = html.replace(/<br\s*\/?>/gi, " ");
-        html = html.replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gim, "");
-        let txt = html.replace(/<[^>]*>/g, " ");
-        return txt.replace(/\s+/g, " ").trim();
-      };
-
-      // Patrones de extracción
-      const INVOICE_PATTERN = /(\d{3}-\d{3}-\d{9,})/;
-      const RUC_PATTERN = /\b(\d{13})\b/;
-      const DATE_PATTERN = /(\d{2}\/\d{2}\/\d{4})/;
-      const MONEY_PATTERN = /^\d{1,3}([.,]\d{3})*[.,]\d{2}$/;
-
-      rows.forEach((row, index) => {
-        try {
-          const cells = row.querySelectorAll("td");
-          if (cells.length < 3) return;
-
-          const cellTexts = Array.from(cells).map((c) => clean(c));
-
-          if (index === 0)
-            log(`Inj Fila 0: ${cellTexts.slice(0, 3).join("|")}`);
-
-          let numero = "SIN_NUMERO";
-          let ruc = "SIN_RUC";
-          let razonSocial = "SIN_RAZON";
-          let fechaEmision = "SIN_FECHA";
-          let fechaAutorizacion = "";
-          let valorSinImpuestos = "0.00";
-          let iva = "0.00";
-          let importeTotal = "0.00";
-
-          // 1. Número de factura
-          for (let txt of cellTexts) {
-            const m = txt.match(INVOICE_PATTERN);
-            if (m) {
-              numero = m[0];
-              break;
-            }
-          }
-
-          // 2. RUC y Razón Social
-          for (let txt of cellTexts) {
-            const m = txt.match(RUC_PATTERN);
-            if (m) {
-              ruc = m[0];
-              let remainder = txt.replace(ruc, "").trim();
-              remainder = remainder.replace(/^[\s-.,]+/, "");
-              if (remainder.length > 2) razonSocial = remainder;
-              break;
-            }
-          }
-
-          // 3. Fechas
-          const foundDates = [];
-          for (let txt of cellTexts) {
-            const m = txt.match(DATE_PATTERN);
-            if (m) foundDates.push(m[0]);
-          }
-          if (foundDates.length > 0) fechaEmision = foundDates[0];
-          fechaAutorizacion = foundDates.length > 1 ? foundDates[1] : "";
-
-          // 4. Valores monetarios (desde el final de la fila)
-          const moneyValues = [];
-          for (let i = cellTexts.length - 1; i >= 0; i--) {
-            let val = cellTexts[i].replace("$", "").trim();
-            if (MONEY_PATTERN.test(val)) moneyValues.unshift(val);
-            if (moneyValues.length >= 3) break;
-          }
-          if (moneyValues.length >= 1)
-            importeTotal = moneyValues[moneyValues.length - 1];
-          if (moneyValues.length >= 2)
-            iva = moneyValues[moneyValues.length - 2];
-          if (moneyValues.length >= 3)
-            valorSinImpuestos = moneyValues[moneyValues.length - 3];
-
-          let tipoSerie = "";
-          let claveAcceso = "";
-
-          // Búsqueda de clave de acceso (49 dígitos)
-          for (let txt of cellTexts) {
-            const m = txt.match(/\b\d{49}\b/);
-            if (m) {
-              claveAcceso = m[0];
-              break;
-            }
-          }
-          if (!claveAcceso && cellTexts[3] && cellTexts[3].length >= 49) {
-            claveAcceso = cellTexts[3].trim();
-          }
-
-          let codDoc = "01";
-          if (claveAcceso && claveAcceso.length === 49) {
-            codDoc = claveAcceso.substring(8, 10);
-          }
-
-          let estadoPortal = "AUTORIZADO";
-          for (let txt of cellTexts) {
-            const upper = txt.toUpperCase();
-            if (upper.includes("ANULAD") || upper.includes("CANCELAD")) {
-              estadoPortal = "ANULADO";
-              break;
-            } else if (upper.includes("NO AUTORIZAD") || upper.includes("RECHAZAD")) {
-              estadoPortal = "NO_AUTORIZADO";
-              break;
-            }
-          }
-
-          // Enlace XML (búsqueda prioritaria → secundaria → terciaria)
-          let xmlLinkId = null;
-          let anchor = row.querySelector('a[id*="lnkXml"]');
-          if (!anchor) {
-            const img = row.querySelector('img[src*="xml.gif"]');
-            if (img) anchor = img.closest("a");
-          }
-          if (!anchor) {
-            const links = row.querySelectorAll("a");
-            for (const a of links) {
-              if (a.innerText.includes("XML")) {
-                anchor = a;
-                break;
-              }
-            }
-          }
-
-          if (anchor) {
-            if (!anchor.id)
-              anchor.id = "sri_gen_" + Math.random().toString(36).substr(2);
-            xmlLinkId = anchor.id;
-          }
-
-          if (anchor || (claveAcceso && claveAcceso.length === 49)) {
-            invoices.push({
-              numero,
-              ruc,
-              razonSocial,
-              tipoSerie,
-              claveAcceso,
-              codDoc,
-              estadoPortal,
-              fechaAutorizacion,
-              fechaEmision,
-              valorSinImpuestos,
-              iva,
-              importeTotal,
-              xmlLinkId,
-              origenConsulta,
-              rowIndex: index,
-              pageIndex: 1,
-            });
-          }
-        } catch (e) {
-          // Ignorar fila con error de parseo
-        }
-      });
-
-      return { invoices, count: invoices.length, origenConsulta, logs: logs };
-    } catch (e) {
-      return { error: e.message, logs: [e.message] };
-    }
-  }
-
-  // ─── Descargar XMLs de la Página Actual ──────────────────────────────
-
   downloadBtn.addEventListener("click", () => {
     if (currentInvoices.length === 0) return;
     processDownloads(currentInvoices);
@@ -601,13 +198,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // ─── Funciones de UI ─────────────────────────────────────────────────
 
-  /**
-   * Escapa caracteres HTML para prevenir inyección XSS
-   * cuando se inserta texto dinámico vía innerHTML.
-   */
   function escapeHtml(str) {
-    if (!str) return "";
-    return str
+    if (str == null) return "";
+    return String(str)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
@@ -620,7 +213,7 @@ document.addEventListener("DOMContentLoaded", function () {
   function updateDashboard(invoices) {
     totalInvoicesEl.textContent = invoices.length;
     const total = invoices.reduce((sum, inv) => {
-      const val = parseFloat(inv.importeTotal.replace(",", ".") || 0);
+      const val = parseSriAmount(inv.importeTotal);
       return sum + val;
     }, 0);
     totalAmountEl.textContent = `$${total.toFixed(2)}`;
@@ -717,6 +310,7 @@ document.addEventListener("DOMContentLoaded", function () {
   saveEmiteBtn.addEventListener("click", () => {
     const url = emiteApiUrlInput.value.trim() || "https://api.emite.ec";
     const key = emiteApiKeyInput.value.trim();
+    try { normalizeApiUrl(url); } catch (error) { emiteConfigStatus.textContent = error.message; return; }
     chrome.storage.local.set({ emiteApiUrl: url, emiteApiKey: key }, () => {
       emiteConfigStatus.textContent = "Configuración guardada";
       emiteConfigStatus.classList.add("config-status--success");
@@ -780,8 +374,8 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) {
-      updateStatus("Error: No se detectó pestaña activa", 0, true);
+    if (!tab || tab.id !== scannedTabId) {
+      updateStatus("Vuelve a la pestaña del SRI que escaneaste.", 0, true);
       return;
     }
 
@@ -812,10 +406,12 @@ document.addEventListener("DOMContentLoaded", function () {
       {
         action: "startEmiteSync",
         tabId: tab.id,
+        frameId: scannedFrameId,
         invoices: currentInvoices,
         origenConsulta: currentOrigenConsulta,
       },
       (response) => {
+        if (response?.started === false) updateStatus(response.error, 0, true);
         if (chrome.runtime.lastError) {
           console.error(
             "[SRI Pro] Error comunicando con background:",
@@ -886,7 +482,7 @@ document.addEventListener("DOMContentLoaded", function () {
         if (state) {
           if (state.status === "IN_PROGRESS") {
             updateStatus(state.step, state.progress);
-          } else if (state.status === "SUCCESS") {
+          } else if (["SUCCESS", "PARTIAL"].includes(state.status)) {
             updateStatus(state.step, 100);
             setTimeout(() => {
               progressContainer.classList.add("hidden");
@@ -905,65 +501,32 @@ document.addEventListener("DOMContentLoaded", function () {
   // ─── Proceso de Descargas ────────────────────────────────────────────
 
   async function processDownloads(invoices) {
-    updateStatus("Iniciando descargas...", 0);
-
-    let completed = 0;
-    const total = invoices.length;
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
-
-    const { downloadFolder } = await chrome.storage.local.get([
-      "downloadFolder",
-    ]);
-
-    for (const inv of invoices) {
-      try {
-        let filename = generateFilename(inv);
-        if (downloadFolder) {
-          filename = `${downloadFolder}/${filename}`;
-        }
-
-        await chrome.tabs.sendMessage(tab.id, {
-          action: "downloadSingleXML",
-          linkId: inv.xmlLinkId,
-          filename: filename,
-        });
-
-        completed++;
-        updateStatus(
-          `Descargando ${completed}/${total}`,
-          (completed / total) * 100
-        );
-      } catch (e) {
-        console.error("Error descargando", inv, e);
-      }
-
-      await new Promise((r) => setTimeout(r, 500));
-    }
-
-    updateStatus("Descarga completada", 100);
-    setTimeout(() => {
-      progressContainer.classList.add("hidden");
-    }, 3000);
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id !== scannedTabId) { updateStatus("Vuelve a la pestaña escaneada", 0, true); return; }
+    try {
+      const result = await chrome.tabs.sendMessage(tab.id, { action: "downloadInvoices", invoices }, { frameId: scannedFrameId });
+      if (!result?.started) throw new Error(result?.error || "No se inició la descarga");
+      updateStatus("Descarga iniciada. Puedes cerrar el popup; mantén abierta la consulta del SRI.", 5);
+    } catch (error) { updateStatus(error.message, 0, true); }
   }
 
   function startBatchDownload() {
     updateStatus("Iniciando descarga masiva...", 0);
 
     chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+      if (tabs[0]?.id !== scannedTabId) { updateStatus("Vuelve a la pestaña escaneada", 0, true); return; }
       chrome.tabs.sendMessage(tabs[0].id, {
         action: "downloadAllPages",
-      });
+      }, { frameId: scannedFrameId });
     });
   }
 
   // ─── Listener de Progreso ────────────────────────────────────────────
 
-  chrome.runtime.onMessage.addListener((request) => {
+  chrome.runtime.onMessage.addListener((request, sender) => {
+    if (sender.tab?.id !== scannedTabId || sender.frameId !== scannedFrameId) return;
     if (request.action === "updateProgress") {
-      const percent = (request.current / request.total) * 100;
+      const percent = Number.isFinite(request.total) && request.total > 0 ? (request.current / request.total) * 100 : 50;
       updateStatus(`Procesando: ${request.current}/${request.total}`, percent);
     }
   });

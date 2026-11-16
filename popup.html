@@ -10,6 +10,7 @@
 
 <body>
   <div class="header">
+    <img class="brand-logo brand-logo--header" src="assets/emite-logo-full-white.svg" alt="EMITE.ec" width="152" height="40">
     <h1>SRI Pro XML</h1>
     <p>Descarga masiva de comprobantes</p>
   </div>
@@ -64,7 +65,7 @@
       <div class="progress-bar-bg">
         <div id="progressBar" class="progress-bar-fill"></div>
       </div>
-      <div id="progressText" class="progress-text">Iniciando...</div>
+      <div role="status" aria-live="polite" id="progressText" class="progress-text">Iniciando...</div>
     </div>
 
     <!-- Tarjeta de Resultado de Sincronización EMITE.ec -->
@@ -103,7 +104,7 @@
         <li>Ve a <strong>Comprobantes Recibidos o Emitidos</strong> y realiza tu consulta.</li>
         <li>Abre esta extensión y presiona <strong>"Escanear Página Actual"</strong> o <strong>"Escanear Todas las Páginas"</strong>.</li>
       </ol>
-      <a href="https://srienlinea.sri.gob.ec/comprobantes-electronicos-internet/pages/consultas/recibidos/comprobantesRecibidos.jsf" target="_blank" class="btn btn-outline btn-sm sri-link-btn">
+      <a href="https://srienlinea.sri.gob.ec/comprobantes-electronicos-internet/pages/consultas/recibidos/comprobantesRecibidos.jsf" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm sri-link-btn">
         <span class="btn-icon" data-icon="externalLink"></span>
         Ir al SRI
       </a>
@@ -113,7 +114,7 @@
     <div class="card card--config">
       <div class="config-header">
         <h3 class="section-title">Configuración</h3>
-        <button id="toggleConfigBtn" class="btn btn-outline btn-icon-sm">
+        <button aria-label="Mostrar u ocultar configuración" id="toggleConfigBtn" class="btn btn-outline btn-icon-sm">
           <span class="btn-icon" data-icon="gear"></span>
         </button>
       </div>
@@ -129,11 +130,12 @@
         <div id="configStatus" class="config-status"></div>
 
         <hr class="config-divider">
-        <h4 class="config-subtitle">Plataforma EMITE.ec</h4>
+        <img class="brand-logo" src="assets/emite-logo-full.svg" alt="EMITE.ec" width="152" height="40">
+        <h4 class="config-subtitle">Conexión con tu empresa</h4>
         <label class="config-label" for="emiteApiUrl">
           URL de API EMITE.ec:
         </label>
-        <input type="text" id="emiteApiUrl" class="config-input" placeholder="https://api.emite.ec">
+        <input type="url" readonly id="emiteApiUrl" class="config-input" placeholder="https://api.emite.ec">
 
         <label class="config-label" for="emiteApiKey">
           API Key de tu Empresa:
@@ -153,18 +155,24 @@
       </div>
     </div>
 
+    <div class="card privacy-notice">
+      <p>Los XML se descargan desde tu sesión del SRI. Al pulsar Sincronizar, se envían a la empresa vinculada en EMITE.ec los datos tributarios y XML de los comprobantes seleccionados. No se envía tu contraseña del SRI.</p>
+      <a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacidad y uso de datos</a>
+      <button id="clearDataBtn" class="btn btn-outline btn-sm">Borrar credenciales y datos locales</button>
+    </div>
+
     <!-- Publicidad -->
     <div class="card card--ad">
       <div class="ad-badge">Gratis</div>
       <h3 class="section-title section-title--spaced ad-title">¡Facturación Electrónica!</h3>
       <p class="ad-text">Descubre <strong>emite.ec</strong>, nuestro sistema en la nube para gestionar tus facturas desde cualquier dispositivo.</p>
       
-      <a href="https://emite.ec" target="_blank" class="btn btn-primary btn-sm">
+      <a href="https://emite.ec" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm">
         <span class="btn-icon" data-icon="globe"></span>
         Usar en la Web (emite.ec)
       </a>
       
-      <a href="https://play.google.com/store/apps/details?id=app.emite.ec&pcampaignid=web_share" target="_blank" class="btn btn-outline btn-sm ad-playstore-btn">
+      <a href="https://play.google.com/store/apps/details?id=app.emite.ec&pcampaignid=web_share" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm ad-playstore-btn">
         <span class="btn-icon" data-icon="playStore"></span>
         Descargar en Google Play
       </a>
@@ -182,32 +190,32 @@
 
   <div class="footer">
     <div class="footer-text">
-      Disenado y desarrollado por el equipo de <a href="https://nuro.ec" target="_blank" class="footer-link">nuro</a>
+      Disenado y desarrollado por el equipo de <a href="https://nuro.ec" target="_blank" rel="noopener noreferrer" class="footer-link">nuro</a>
     </div>
     <a href="https://wa.me/593958900756?text=Hola%20Jonathan,%20estoy%20usando%20la%20extensi%C3%B3n%20SRI%20Pro%20XML%20y%20necesito%20ayuda."
-      target="_blank" class="whatsapp-btn">
+      target="_blank" rel="noopener noreferrer" class="whatsapp-btn">
       <span class="btn-icon" data-icon="whatsapp"></span>
       Jonathan Chavez
     </a>
     <div class="social-section">
       <p class="social-label">Siguenos en nuestras redes sociales</p>
       <div class="social-grid">
-        <a href="https://facebook.com/nurolatam" target="_blank" class="social-link social-link--facebook" aria-label="Facebook">
+        <a href="https://facebook.com/nurolatam" target="_blank" rel="noopener noreferrer" class="social-link social-link--facebook" aria-label="Facebook">
           <span class="social-icon" data-icon="facebook"></span>
         </a>
-        <a href="https://instagram.com/nurolatam" target="_blank" class="social-link social-link--instagram" aria-label="Instagram">
+        <a href="https://instagram.com/nurolatam" target="_blank" rel="noopener noreferrer" class="social-link social-link--instagram" aria-label="Instagram">
           <span class="social-icon" data-icon="instagram"></span>
         </a>
-        <a href="https://x.com/nurolatam" target="_blank" class="social-link social-link--x" aria-label="X">
+        <a href="https://x.com/nurolatam" target="_blank" rel="noopener noreferrer" class="social-link social-link--x" aria-label="X">
           <span class="social-icon" data-icon="x"></span>
         </a>
-        <a href="https://tiktok.com/@nurolatam" target="_blank" class="social-link social-link--tiktok" aria-label="TikTok">
+        <a href="https://tiktok.com/@nurolatam" target="_blank" rel="noopener noreferrer" class="social-link social-link--tiktok" aria-label="TikTok">
           <span class="social-icon" data-icon="tiktok"></span>
         </a>
-        <a href="https://linkedin.com/company/nurolatam" target="_blank" class="social-link social-link--linkedin" aria-label="LinkedIn">
+        <a href="https://linkedin.com/company/nurolatam" target="_blank" rel="noopener noreferrer" class="social-link social-link--linkedin" aria-label="LinkedIn">
           <span class="social-icon" data-icon="linkedin"></span>
         </a>
-        <a href="https://youtube.com/@nurolatam" target="_blank" class="social-link social-link--youtube" aria-label="YouTube">
+        <a href="https://youtube.com/@nurolatam" target="_blank" rel="noopener noreferrer" class="social-link social-link--youtube" aria-label="YouTube">
           <span class="social-icon" data-icon="youtube"></span>
         </a>
       </div>

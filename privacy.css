@@ -1,0 +1,5 @@
+:root { color-scheme: light; --text: #17233a; --bg: #f5f7fb; --link: #1954e6; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.65 system-ui, sans-serif; }
+main { max-width: 800px; padding: 36px 24px; margin: auto; }
+a { color: var(--link); }
+h1, h2 { line-height: 1.3; }

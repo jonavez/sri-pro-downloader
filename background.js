@@ -1,3 +1,4 @@
+import { generateFilename } from "./utils.js";
 /**
  * @fileoverview Service Worker (background) para SRI Pro Downloader.
  *
@@ -7,7 +8,7 @@
  * - Orquestar la sincronización en dos fases con EMITE.ec (facturador-ec/api).
  * - Validar URLs y nombres de archivo por seguridad (ISO/IEC 27001).
  *
- * @version 3.4.1
+ * @version 3.6.0
  * @license MIT
  */
 
@@ -25,7 +26,7 @@ import {
  * Dominios permitidos para descargas (principio de menor privilegio).
  * @const {RegExp}
  */
-const ALLOWED_URL_PATTERN = /^https?:\/\/([a-z0-9-]+\.)*sri\.gob\.ec\//i;
+const ALLOWED_URL_PATTERN = /^https:\/\/srienlinea\.sri\.gob\.ec\//i;
 
 /**
  * Patrón para sanitizar nombres de archivo.
@@ -50,6 +51,17 @@ const INGEST_CHUNK_SIZE = 3;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const filenameQueue = new Map();
+const storageReady = (async () => {
+  await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+  const { emiteSyncState, lastEmiteSyncResult } = await chrome.storage.local.get(["emiteSyncState", "lastEmiteSyncResult"]);
+  if (emiteSyncState?.status === "IN_PROGRESS") {
+    await chrome.storage.local.set({
+      emiteSyncState: { status: "ERROR", progress: 0, error: "Chrome interrumpió la sincronización. Escanea y vuelve a sincronizar; se comprobarán los duplicados." },
+      ...(lastEmiteSyncResult ? { lastEmiteSyncResult: { ...lastEmiteSyncResult, enProgreso: false } } : {}),
+    });
+  }
+})();
+let syncRunning = false;
 
 function isAllowedUrl(url) {
   if (!url || typeof url !== "string") return false;
@@ -58,7 +70,8 @@ function isAllowedUrl(url) {
 
 function sanitizeFilename(filename) {
   if (!filename || typeof filename !== "string") return "";
-  let safe = filename.replace(/\.\.[/\\]/g, "");
+  let safe = filename.replace(/\\/g, "/").split("/")
+    .filter((part) => part && part !== "." && part !== "..").join("/");
   safe = safe.replace(UNSAFE_FILENAME_CHARS, "");
   return safe.trim();
 }
@@ -107,11 +120,25 @@ function dequeueFilename(downloadId) {
  * @param {Array<object>} [providedInvoices=null] - Comprobantes ya escaneados por el popup.
  * @param {string} [origenConsulta="RECIBIDOS"] - Contexto: "EMITIDOS" o "RECIBIDOS".
  */
-async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta = "RECIBIDOS") {
+async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta = "RECIBIDOS", frameId = 0) {
+  const send = (message) => chrome.tabs.sendMessage(tabId, message, { frameId });
+  const reserved = await send({ action: "reserveSync" });
+  if (!reserved?.success) throw new Error("El portal está ocupado descargando o escaneando. Espera a que termine.");
+  try {
+    return await runEmiteSync(tabId, providedInvoices, origenConsulta, frameId);
+  } finally {
+    try { await send({ action: "goToPage", page: 1 }); } catch (_) { /* La pestaña puede haberse cerrado. */ }
+    try { await send({ action: "releaseSync" }); } catch (_) { /* La reserva expira si se interrumpe Chrome. */ }
+  }
+}
+
+async function runEmiteSync(tabId, providedInvoices = null, origenConsulta = "RECIBIDOS", frameId = 0) {
+  const sendSriMessage = (message) => chrome.tabs.sendMessage(tabId, message, { frameId });
   const esEmitidosInicial = origenConsulta === "EMITIDOS";
   const etiquetaInicial = esEmitidosInicial ? "emitidos" : "recibidos";
   console.log(`[SRI Pro] Iniciando sincronizacion de ${etiquetaInicial} con EMITE.ec en pestana:`, tabId);
 
+  await storageReady;
   // 1. Verificar estado y credenciales
   await chrome.storage.local.set({
     emiteSyncState: {
@@ -158,7 +185,7 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
     });
 
     try {
-      const response = await chrome.tabs.sendMessage(tabId, {
+      const response = await sendSriMessage({
         action: "extractInvoices",
       });
       if (response && response.invoices && response.invoices.length > 0) {
@@ -168,134 +195,6 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
       console.warn("[SRI Pro] Error al comunicarse con content script:", err);
     }
 
-    // Respaldo resiliente: Si la mensajería falló, extraer directamente vía scripting en todos los frames
-    if (!rawInvoices || rawInvoices.length === 0) {
-      try {
-        console.log("[SRI Pro] Intentando extracción de respaldo vía scripting.executeScript...");
-        const injectionResults = await chrome.scripting.executeScript({
-          target: { tabId: tabId, allFrames: true },
-          func: () => {
-            const invoices = [];
-            let rows = document.querySelectorAll("tr[data-ri]");
-            if (rows.length === 0) {
-              const allRows = document.querySelectorAll("table tbody tr");
-              const filtered = [];
-              allRows.forEach((r) => {
-                if (r.innerText && /\d{2}\/\d{2}\/\d{4}/.test(r.innerText)) filtered.push(r);
-              });
-              rows = filtered;
-            }
-            const clean = (el) => {
-              if (!el) return "";
-              let html = el.innerHTML || "";
-              html = html.replace(/<br\s*\/?>/gi, " ");
-              html = html.replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gim, "");
-              let txt = html.replace(/<[^>]*>/g, " ");
-              return txt.replace(/\s+/g, " ").trim();
-            };
-            const INVOICE_PATTERN = /(\d{3}-\d{3}-\d{9,})/;
-            const RUC_PATTERN = /\b(\d{13})\b/;
-            const DATE_PATTERN = /(\d{2}\/\d{2}\/\d{4})/;
-            const MONEY_PATTERN = /^\d{1,3}([.,]\d{3})*[.,]\d{2}$/;
-
-            rows.forEach((row, index) => {
-              try {
-                const cells = row.querySelectorAll("td");
-                if (cells.length < 3) return;
-                const cellTexts = Array.from(cells).map((c) => clean(c));
-                let numero = "SIN_NUMERO";
-                let ruc = "SIN_RUC";
-                let razonSocial = "SIN_RAZON";
-                let fechaEmision = "SIN_FECHA";
-                let fechaAutorizacion = "";
-                let valorSinImpuestos = "0.00";
-                let iva = "0.00";
-                let importeTotal = "0.00";
-
-                for (let txt of cellTexts) {
-                  const m = txt.match(INVOICE_PATTERN);
-                  if (m) { numero = m[0]; break; }
-                }
-                for (let txt of cellTexts) {
-                  const m = txt.match(RUC_PATTERN);
-                  if (m) {
-                    ruc = m[0];
-                    let remainder = txt.replace(ruc, "").trim().replace(/^[\s-.,]+/, "");
-                    if (remainder.length > 2) razonSocial = remainder;
-                    break;
-                  }
-                }
-                const foundDates = [];
-                for (let txt of cellTexts) {
-                  const m = txt.match(DATE_PATTERN);
-                  if (m) foundDates.push(m[0]);
-                }
-                if (foundDates.length > 0) fechaEmision = foundDates[0];
-                fechaAutorizacion = foundDates.length > 1 ? foundDates[1] : "";
-
-                const moneyValues = [];
-                for (let i = cellTexts.length - 1; i >= 0; i--) {
-                  let val = cellTexts[i].replace("$", "").trim();
-                  if (MONEY_PATTERN.test(val)) moneyValues.unshift(val);
-                  if (moneyValues.length >= 3) break;
-                }
-                if (moneyValues.length >= 1) importeTotal = moneyValues[moneyValues.length - 1];
-                if (moneyValues.length >= 2) iva = moneyValues[moneyValues.length - 2];
-                if (moneyValues.length >= 3) valorSinImpuestos = moneyValues[moneyValues.length - 3];
-
-                let claveAcceso = "";
-                for (let txt of cellTexts) {
-                  const m = txt.match(/\b\d{49}\b/);
-                  if (m) { claveAcceso = m[0]; break; }
-                }
-                if (!claveAcceso && cellTexts[3] && cellTexts[3].length >= 49) {
-                  claveAcceso = cellTexts[3].trim();
-                }
-
-                let codDoc = "01";
-                if (claveAcceso && claveAcceso.length === 49) {
-                  codDoc = claveAcceso.substring(8, 10);
-                }
-
-                let estadoPortal = "AUTORIZADO";
-                for (let txt of cellTexts) {
-                  const upper = txt.toUpperCase();
-                  if (upper.includes("ANULAD") || upper.includes("CANCELAD")) {
-                    estadoPortal = "ANULADO";
-                    break;
-                  } else if (upper.includes("NO AUTORIZAD") || upper.includes("RECHAZAD")) {
-                    estadoPortal = "NO_AUTORIZADO";
-                    break;
-                  }
-                }
-
-                let anchor = row.querySelector('a[id*="lnkXml"]') || (row.querySelector('img[src*="xml.gif"]') ? row.querySelector('img[src*="xml.gif"]').closest("a") : null);
-                let xmlLinkId = anchor ? (anchor.id || "sri_gen_" + Math.random().toString(36).substr(2)) : null;
-
-                if (anchor || (claveAcceso && claveAcceso.length === 49)) {
-                  invoices.push({
-                    numero, ruc, razonSocial, tipoSerie: "", claveAcceso, codDoc, estadoPortal,
-                    fechaAutorizacion, fechaEmision, valorSinImpuestos, iva, importeTotal, xmlLinkId,
-                    rowIndex: index
-                  });
-                }
-              } catch (e) {}
-            });
-            return invoices;
-          },
-        });
-
-        if (injectionResults) {
-          for (const frameResult of injectionResults) {
-            if (Array.isArray(frameResult.result) && frameResult.result.length > 0) {
-              rawInvoices = rawInvoices.concat(frameResult.result);
-            }
-          }
-        }
-      } catch (scriptErr) {
-        console.warn("[SRI Pro] Fallback scripting.executeScript también falló:", scriptErr);
-      }
-    }
   }
 
   // Deduplicar comprobantes por clave de acceso o número
@@ -329,8 +228,9 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
     const conOrigen = rawInvoices.find(
       (inv) => inv.origenConsulta && inv.origenConsulta !== "DESCONOCIDO"
     );
-    tipoSincronizacion = conOrigen ? conOrigen.origenConsulta : "RECIBIDOS";
+    tipoSincronizacion = conOrigen ? conOrigen.origenConsulta : "DESCONOCIDO";
   }
+  if (!["RECIBIDOS", "EMITIDOS"].includes(tipoSincronizacion)) throw new Error("No se pudo identificar si la consulta es de recibidos o emitidos");
   const esEmitidos = tipoSincronizacion === "EMITIDOS";
   const etiquetaSinc = esEmitidos ? "emitidos" : "recibidos";
 
@@ -426,7 +326,10 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
       },
     });
     const clavesAnuladas = anuladas_detectadas.map((a) => a.clave_acceso);
-    await updateVoidedInvoices(apiUrl, apiKey, clavesAnuladas);
+    for (let i = 0; i < clavesAnuladas.length; i += 50) {
+      const result = await updateVoidedInvoices(apiUrl, apiKey, clavesAnuladas.slice(i, i + 50), tipoSincronizacion);
+      if (!result.success) throw new Error(result.error || "No se pudieron actualizar las anuladas");
+    }
   }
 
   // 5. Fase 2: Ingesta en micro-lotes
@@ -478,10 +381,12 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
 
   // Dividir en chunks de tamaño seguro
   const chunks = [];
-  for (let i = 0; i < por_sincronizar.length; i += INGEST_CHUNK_SIZE) {
-    chunks.push(
-      por_sincronizar.slice(i, i + INGEST_CHUNK_SIZE).map((item) => item.clave_acceso)
-    );
+  for (const item of por_sincronizar) {
+    const page = keyToInvoiceMap.get(item.clave_acceso)?.pageIndex || 1;
+    const last = chunks[chunks.length - 1];
+    const lastPage = last && (keyToInvoiceMap.get(last[0])?.pageIndex || 1);
+    if (!last || last.length >= INGEST_CHUNK_SIZE || page !== lastPage) chunks.push([]);
+    chunks[chunks.length - 1].push(item.clave_acceso);
   }
 
   for (let idx = 0; idx < chunks.length; idx++) {
@@ -496,12 +401,13 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
     const targetPage = (firstInv && firstInv.pageIndex) || 1;
     if (tabId && targetPage > 0) {
       try {
-        await chrome.tabs.sendMessage(tabId, {
+        const navigation = await sendSriMessage({
           action: "goToPage",
           page: targetPage,
         });
+        if (!navigation?.success) throw new Error(navigation?.error || "Página no confirmada");
       } catch (navErr) {
-        // Continuar si la navegación por mensaje no responde
+        throw new Error("No se pudo navegar a la página del lote: " + navErr.message);
       }
     }
 
@@ -523,7 +429,7 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
       // Intento 1: Vía mensajería directa con content script
       if (inv && tabId) {
         try {
-          const xmlResp = await chrome.tabs.sendMessage(tabId, {
+          const xmlResp = await sendSriMessage({
             action: "fetchComprobanteXml",
             linkId: inv.xmlLinkId,
             claveAcceso: clave,
@@ -532,143 +438,13 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
             xmlContent = xmlResp.xml;
           }
         } catch (e) {
-          // Fallback continuará abajo
+          // Se informa como fallido si no hay XML válido
         }
       }
 
-      // Intento 2 (Respaldo resiliente): Inyección directa en todos los frames
-      // Localiza la fila por linkId o por clave de acceso en el DOM autenticado
-      if (!xmlContent && tabId) {
-        try {
-          const frameResults = await chrome.scripting.executeScript({
-            target: { tabId: tabId, allFrames: true },
-            args: [inv ? inv.xmlLinkId : null, clave],
-            func: async (targetLinkId, targetClave) => {
-              let link = targetLinkId ? document.getElementById(targetLinkId) : null;
-              if (!link && targetClave) {
-                const rows = document.querySelectorAll(
-                  "tr[data-ri], table tbody tr"
-                );
-                for (const r of rows) {
-                  if (r.textContent && r.textContent.includes(targetClave)) {
-                    link =
-                      r.querySelector('a[id*="lnkXml"]') ||
-                      (r.querySelector('img[src*="xml.gif"]')
-                        ? r.querySelector('img[src*="xml.gif"]').closest("a")
-                        : null) ||
-                      Array.from(r.querySelectorAll("a")).find((a) =>
-                        (a.textContent || "").includes("XML")
-                      );
-                    if (link) break;
-                  }
-                }
-              }
-              if (!link) return null;
-
-              const isLikelyXml = (t) => {
-                if (!t || typeof t !== "string") return false;
-                const lower = t.toLowerCase();
-                return (
-                  lower.includes("<?xml") ||
-                  lower.includes("<factura") ||
-                  lower.includes("<comprobante") ||
-                  lower.includes("<autorizacion") ||
-                  lower.includes("<notacredito") ||
-                  lower.includes("<notadebito") ||
-                  lower.includes("<comprobanteretencion") ||
-                  lower.includes("<liquidacioncompra") ||
-                  lower.includes("<guiaremision")
-                );
-              };
-
-              // 1. Fetch directo por href si es enlace estático
-              const href = link.getAttribute("href");
-              if (href && href !== "#" && !href.startsWith("javascript:")) {
-                try {
-                  const res = await fetch(link.href, { credentials: "include" });
-                  if (res.ok) {
-                    const text = await res.text();
-                    if (isLikelyXml(text)) return text.trim();
-                  }
-                } catch (e) {}
-              }
-
-              // 2. Submit de formulario JSF/PrimeFaces vía application/x-www-form-urlencoded
-              const form = link.closest("form") || document.forms[0];
-              if (form) {
-                try {
-                  const params = new URLSearchParams();
-                  const elements = form.elements;
-                  for (let i = 0; i < elements.length; i++) {
-                    const el = elements[i];
-                    if (el.name && !el.disabled) {
-                      if (el.type === "radio" || el.type === "checkbox") {
-                        if (el.checked) params.append(el.name, el.value);
-                      } else if (el.type !== "submit" && el.type !== "button") {
-                        params.append(el.name, el.value);
-                      }
-                    }
-                  }
-
-                  let targetParam = link.id;
-                  const onclickAttr = link.getAttribute("onclick") || "";
-                  const match =
-                    onclickAttr.match(/'([^']+)':'([^']+)'/) ||
-                    onclickAttr.match(/"([^"]+)":"([^"]+)"/);
-                  if (match) targetParam = match[1];
-                  else if (link.name) targetParam = link.name;
-
-                  params.set(targetParam, targetParam);
-                  if (link.id && link.id !== targetParam)
-                    params.set(link.id, link.id);
-                  if (form.id) params.set(form.id, form.id);
-                  params.set("javax.faces.source", targetParam);
-
-                  const vsInput =
-                    form.querySelector('[name="javax.faces.ViewState"]') ||
-                    document.querySelector('[name="javax.faces.ViewState"]');
-                  if (vsInput && vsInput.value)
-                    params.set("javax.faces.ViewState", vsInput.value);
-
-                  const actionUrl = form.action || window.location.href;
-                  const controller = new AbortController();
-                  const timer = setTimeout(() => controller.abort(), 6000);
-                  const res = await fetch(actionUrl, {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-                      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    },
-                    body: params.toString(),
-                    credentials: "include",
-                    signal: controller.signal,
-                  });
-                  clearTimeout(timer);
-                  if (res.ok) {
-                    const text = await res.text();
-                    if (isLikelyXml(text)) return text.trim();
-                  }
-                } catch (e) {}
-              }
-              return null;
-            },
-          });
-
-          if (frameResults) {
-            for (const fr of frameResults) {
-              if (
-                fr.result &&
-                typeof fr.result === "string" &&
-                fr.result.length > 50
-              ) {
-                xmlContent = fr.result;
-                break;
-              }
-            }
-          }
-        } catch (scriptErr) {
-          console.warn("[SRI Pro] Fallback directo de XML falló:", scriptErr);
-        }
+      if (!xmlContent) {
+        fallidosTotal.push({ clave_acceso: clave, error: "No se pudo obtener el XML en la sesión del SRI. Vuelve a consultar y reintenta." });
+        continue;
       }
 
       chunkPayload.push({
@@ -677,13 +453,13 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
       });
     }
 
-    const chunkRes = await ingestChunk(
+    const chunkRes = chunkPayload.length ? await ingestChunk(
       apiUrl,
       apiKey,
       chunkPayload,
       2,
       tipoSincronizacion
-    );
+    ) : { success: true, data: { guardados: [], fallidos: [] } };
     if (chunkRes.success && chunkRes.data) {
       if (Array.isArray(chunkRes.data.guardados)) {
         guardadosTotal.push(...chunkRes.data.guardados);
@@ -693,7 +469,7 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
       }
     } else {
       // Chunk completo fallo
-      chunkKeys.forEach((k) =>
+      chunkPayload.map((item) => item.clave_acceso).forEach((k) =>
         fallidosTotal.push({ clave_acceso: k, error: chunkRes.error || "Fallo de conexión" })
       );
     }
@@ -733,7 +509,7 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
   // Restaurar la pestaña a la página 1 si se navegó durante la sincronización
   if (tabId) {
     try {
-      await chrome.tabs.sendMessage(tabId, { action: "goToPage", page: 1 });
+      await sendSriMessage({ action: "goToPage", page: 1 });
     } catch (e) {}
   }
 
@@ -760,14 +536,14 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
   await chrome.storage.local.set({
     lastEmiteSyncResult: finalResult,
     emiteSyncState: {
-      status: "SUCCESS",
+      status: fallidosTotal.length ? "PARTIAL" : "SUCCESS",
       progress: 100,
       step: `Sincronización completada: ${guardadosTotal.length} nuevas, ${duplicadas.length} duplicadas.`,
       error: null,
     },
   });
 
-  console.log("[SRI Pro] Sincronización finalizada exitosamente:", finalResult);
+  console.log("[SRI Pro] Sincronización finalizada.");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -775,6 +551,17 @@ async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta =
 // ─────────────────────────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return false;
+  const fromPopup = sender.url === chrome.runtime.getURL("popup.html");
+  const fromSri = sender.tab && isAllowedUrl(sender.url || "");
+  if (!fromPopup && !fromSri) return false;
+  if (request.action === "getDownloadFilename" && fromSri) {
+    storageReady.then(() => chrome.storage.local.get("downloadFolder")).then(({ downloadFolder }) => {
+      const name = generateFilename(request.invoice || {});
+      sendResponse({ filename: sanitizeFilename(downloadFolder ? `${downloadFolder}/${name}` : name) });
+    });
+    return true;
+  }
   if (request.action === "downloadFile") {
     handleDownload(request.url, request.filename, sendResponse);
     return true;
@@ -784,15 +571,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const safeName = sanitizeFilename(request.filename);
     if (safeName) {
       enqueueFilename("pending", safeName);
-      console.log("[SRI Pro] Descarga esperada encolada:", safeName);
+
     }
     sendResponse({ received: true });
     return false;
   }
 
   if (request.action === "startEmiteSync") {
-    executeEmiteSync(request.tabId, request.invoices, request.origenConsulta)
-      .then(() => sendResponse({ started: true }))
+    if (!fromPopup || syncRunning) {
+      sendResponse({ started: false, error: "Sincronización no disponible o ya en curso" });
+      return false;
+    }
+    syncRunning = true;
+    sendResponse({ started: true });
+    chrome.tabs.get(request.tabId).then((tab) => {
+      if (!isAllowedUrl(tab.url)) throw new Error("La pestaña debe pertenecer al portal SRI seguro");
+      return executeEmiteSync(request.tabId, request.invoices, request.origenConsulta, request.frameId || 0);
+    })
       .catch((err) => {
         console.error("[SRI Pro] Error fatal en executeEmiteSync:", err);
         chrome.storage.local.set({
@@ -803,8 +598,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             error: err.message,
           },
         });
-      });
-    return true; // Respuesta asíncrona
+      }).finally(() => { syncRunning = false; });
+    return false;
   }
 });
 
@@ -813,12 +608,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  if (!isAllowedUrl(item.url) && !isAllowedUrl(item.referrer) &&
+      !(typeof item.url === "string" && item.url.startsWith("blob:https://srienlinea.sri.gob.ec/"))) { suggest(); return; }
   const customFilename = dequeueFilename(item.id);
 
   if (customFilename) {
-    console.log(
-      `[SRI Pro] Asignando nombre "${customFilename}" a descarga #${item.id}`
-    );
+
     suggest({
       filename: customFilename,
       conflictAction: "uniquify",
@@ -869,17 +664,17 @@ function handleDownload(url, filename, sendResponse) {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === "install") {
-    console.log("[SRI Pro] Extensión instalada correctamente (v3.5.0).");
+    console.log("[SRI Pro] Extensión instalada correctamente (v3.6.0).");
   } else if (details.reason === "update") {
     console.log(
-      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.5.0.`
+      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.6.0.`
     );
     filenameQueue.clear();
   }
 
   // Asegurar que las pestañas de SRI abiertas antes de la actualización reciban content.js
   try {
-    const tabs = await chrome.tabs.query({ url: "*://*.sri.gob.ec/*" });
+    const tabs = await chrome.tabs.query({ url: "https://srienlinea.sri.gob.ec/*" });
     for (const tab of tabs) {
       if (tab.id) {
         chrome.scripting

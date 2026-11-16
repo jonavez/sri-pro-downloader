@@ -1,3 +1,4 @@
+import { parseSriAmount } from "./utils.js";
 /**
  * @fileoverview Cliente de sincronización para la API de EMITE.ec.
  *
@@ -5,7 +6,7 @@
  * y el backend de EMITE.ec (facturador-ec/api), implementando el protocolo
  * diferencial de dos fases con micro-lotes (Chunked Differential Sync).
  *
- * Normas aplicadas:
+ * Controles de referencia (sin certificación):
  * - ISO/IEC 27001 (Seguridad de la información y menor privilegio)
  * - ISO/IEC 25010 (Mantenibilidad y tolerancia a fallos)
  *
@@ -13,7 +14,7 @@
  * @module emite_sync
  */
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 25_000;
 
 /**
  * Normaliza la URL base de la API eliminando barras inclinadas al final.
@@ -21,11 +22,14 @@ const DEFAULT_TIMEOUT_MS = 120_000;
  * @param {string} url - URL base configurada.
  * @returns {string} URL normalizada sin barra final.
  */
-function normalizeApiUrl(url) {
+export function normalizeApiUrl(url) {
   if (!url || typeof url !== "string") return "https://api.emite.ec";
   let clean = url.trim();
   while (clean.endsWith("/")) {
     clean = clean.slice(0, -1);
+  }
+  if (clean !== "https://api.emite.ec") {
+    throw new Error("Solo se permite la API oficial https://api.emite.ec");
   }
   return clean;
 }
@@ -41,7 +45,10 @@ function normalizeApiUrl(url) {
  * @returns {Promise<{ok: boolean, status: number, data?: any, error?: string}>}
  */
 async function fetchEmiteApi(endpoint, apiUrl, apiKey, options = {}) {
-  const baseUrl = normalizeApiUrl(apiUrl);
+  let baseUrl;
+  try { baseUrl = normalizeApiUrl(apiUrl); } catch (err) {
+    return { ok: false, status: 0, error: err.message };
+  }
   const targetUrl = `${baseUrl}${endpoint}`;
 
   const controller = new AbortController();
@@ -59,9 +66,10 @@ async function fetchEmiteApi(endpoint, apiUrl, apiKey, options = {}) {
       ...options,
       headers,
       signal: controller.signal,
+      redirect: "error",
+      credentials: "omit",
+      cache: "no-store",
     });
-
-    clearTimeout(timer);
 
     let responseData;
     const contentType = response.headers.get("content-type") || "";
@@ -93,6 +101,8 @@ async function fetchEmiteApi(endpoint, apiUrl, apiKey, options = {}) {
       status: 0,
       error: `Error de red al conectar con ${targetUrl}: ${err.message}`,
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -163,14 +173,11 @@ export async function preCheckInvoices(
 
   // Mapear al DTO esperado por el backend
   const comprobantesDto = rawInvoices
-    .filter((inv) => inv.claveAcceso && inv.claveAcceso.length === 49)
+    .filter((inv) => /^\d{49}$/.test(inv.claveAcceso || ""))
     .map((inv) => {
       // Extraer cod_doc desde las posiciones 9 y 10 de la clave de acceso
       const codDoc = inv.codDoc || inv.claveAcceso.substring(8, 10);
-      const totalNum =
-        parseFloat(
-          (inv.importeTotal || "0").replace("$", "").replace(",", ".")
-        ) || 0;
+      const totalNum = parseSriAmount(inv.importeTotal);
 
       return {
         clave_acceso: inv.claveAcceso,
@@ -235,6 +242,7 @@ export async function ingestChunk(
     };
   }
 
+  if (chunk.length > 5) return { success: false, error: "Máximo 5 comprobantes por lote" };
   const payload = {
     ambiente,
     tipo_sincronizacion: tipoSincronizacion,
@@ -272,7 +280,7 @@ export async function ingestChunk(
  * @param {Array<string>} clavesAnuladas - Lista de claves anuladas.
  * @returns {Promise<{success: boolean, data?: object, error?: string}>}
  */
-export async function updateVoidedInvoices(apiUrl, apiKey, clavesAnuladas) {
+export async function updateVoidedInvoices(apiUrl, apiKey, clavesAnuladas, tipoSincronizacion = "RECIBIDOS") {
   if (!Array.isArray(clavesAnuladas) || clavesAnuladas.length === 0) {
     return { success: true, data: { total_actualizadas: 0 } };
   }
@@ -285,6 +293,7 @@ export async function updateVoidedInvoices(apiUrl, apiKey, clavesAnuladas) {
       method: "POST",
       body: JSON.stringify({
         claves_acceso: clavesAnuladas,
+        tipo_sincronizacion: tipoSincronizacion,
         motivo: "Detectado como anulado en portal SRI vía extensión",
       }),
     }

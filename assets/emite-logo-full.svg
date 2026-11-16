@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 950 250">
+  <defs>
+    <linearGradient id="mainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#051f84" />
+      <stop offset="100%" stop-color="#1954e6" />
+    </linearGradient>
+    <linearGradient id="foldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0066ff" />
+      <stop offset="100%" stop-color="#0099ff" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="-5" dy="5" stdDeviation="6" flood-color="#051f84" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <g transform="translate(10, 15) scale(0.45)">
+    <path d="
+      M 150 60
+      L 380 60
+      L 340 140
+      L 170 140
+      L 170 190
+      L 360 190
+      L 320 270
+      L 170 270
+      L 170 430
+      L 330 430
+      L 365 395
+      L 365 270
+      A 7.5 7.5 0 0 1 380 270
+      L 380 380
+      L 270 490
+      L 150 490
+      A 60 60 0 0 1 90 430
+      L 90 120
+      A 60 60 0 0 1 150 60
+      Z" fill="url(#mainGrad)" stroke="url(#mainGrad)" stroke-width="4" stroke-linejoin="round"/>
+
+    <path d="
+      M 380 380
+      L 270 490
+      L 270 400
+      A 20 20 0 0 1 290 380
+      Z" fill="url(#foldGrad)" filter="url(#shadow)" stroke="url(#foldGrad)" stroke-width="2" stroke-linejoin="round"/>
+
+    <g fill="url(#foldGrad)">
+      <rect x="210" y="310" width="110" height="16" rx="8" />
+      <rect x="210" y="345" width="80" height="16" rx="8" />
+      <rect x="210" y="380" width="50" height="16" rx="8" />
+    </g>
+  </g>
+
+  <text x="210" y="172" font-family="'Outfit', 'Inter', system-ui, -apple-system, sans-serif" letter-spacing="-3">
+    <tspan font-weight="900" font-size="140" fill="#051f84">EMITE</tspan>
+    <tspan font-weight="700" font-size="140" fill="#0066ff">.ec</tspan>
+  </text>
+</svg>
