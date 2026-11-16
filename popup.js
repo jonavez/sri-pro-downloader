@@ -49,10 +49,51 @@ document.addEventListener("DOMContentLoaded", function () {
 
   let currentInvoices = [];
 
+  /**
+   * Oculta y resetea todos los datos previos mostrados en la interfaz.
+   * Cumple con la regla de reseteo completo antes de un nuevo escaneo.
+   */
+  function resetPreviousData() {
+    currentInvoices = [];
+    totalInvoicesEl.textContent = "0";
+    totalAmountEl.textContent = "$0.00";
+
+    // Ocultar y vaciar lista de facturas
+    listContainer.classList.add("hidden");
+    facturasList.innerHTML = "";
+
+    // Ocultar y resetear tarjeta de resultado de sincronización
+    syncResultCard.classList.add("hidden");
+    syncNewCount.textContent = "0";
+    syncDupCount.textContent = "0";
+    syncVoidCount.textContent = "0";
+    syncNcCount.textContent = "0";
+    syncResultMsg.textContent = "";
+    if (syncErrorDetail) {
+      syncErrorDetail.classList.add("hidden");
+      syncErrorDetail.textContent = "";
+    }
+
+    // Ocultar botones de acción secundarios hasta nuevo escaneo exitoso
+    actionButtons.classList.add("hidden");
+
+    // Mostrar instrucciones si estaban ocultas
+    if (instructionsCard) {
+      instructionsCard.classList.remove("hidden");
+    }
+
+    // Ocultar contenedor de barra de progreso si no está en proceso activo
+    progressContainer.classList.add("hidden");
+
+    // Limpiar almacenamiento local para que no reaparezcan datos viejos al reabrir el popup
+    chrome.storage.local.remove(["lastEmiteSyncResult", "emiteSyncState"]);
+  }
+
   // ─── Escanear Facturas ───────────────────────────────────────────────
 
   scanBtn.addEventListener("click", async () => {
-    updateStatus("Escaneando...", 0);
+    resetPreviousData();
+    updateStatus("Escaneando página actual...", 5);
     clearDebug();
 
     const [tab] = await chrome.tabs.query({
@@ -564,6 +605,18 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
+    // Inicializar visualmente la tarjeta de sincronización en tiempo real de inmediato
+    syncResultCard.classList.remove("hidden");
+    syncNewCount.textContent = "0";
+    syncDupCount.textContent = "0";
+    syncVoidCount.textContent = "0";
+    syncNcCount.textContent = "0";
+    syncResultMsg.textContent = `Analizadas: ${currentInvoices.length || 0}. Iniciando análisis en tiempo real...`;
+    if (syncErrorDetail) {
+      syncErrorDetail.classList.add("hidden");
+      syncErrorDetail.textContent = "";
+    }
+
     updateStatus("Iniciando sincronización con EMITE.ec...", 5);
     chrome.runtime.sendMessage({ action: "startEmiteSync", tabId: tab.id });
   });
@@ -579,6 +632,9 @@ document.addEventListener("DOMContentLoaded", function () {
     let msg = `Analizadas: ${result.totalAnalizados ?? 0}. Sincronizadas: ${result.totalSincronizadas ?? 0}. `;
     if (result.totalFallidas > 0) {
       msg += `Fallidas: ${result.totalFallidas}. `;
+    }
+    if (result.enProgreso && result.totalLotes > 0) {
+      msg += `(Lote ${result.loteActual ?? 1} de ${result.totalLotes} en proceso...)`;
     }
     syncResultMsg.textContent = msg;
 
@@ -602,6 +658,7 @@ document.addEventListener("DOMContentLoaded", function () {
       syncErrorDetail.classList.remove("hidden");
     } else {
       syncErrorDetail.classList.add("hidden");
+      syncErrorDetail.textContent = "";
     }
   }
 

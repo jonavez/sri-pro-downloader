@@ -308,13 +308,44 @@ async function fetchXMLContent(linkId) {
   if (form) {
     try {
       const formData = new FormData(form);
-      formData.set(linkId, linkId);
+
+      // Determinar parametro exacto: desde onclick (patron jsfcljs o PrimeFaces.ab) o name o id
+      let targetParam = link.id;
+      const onclickAttr = link.getAttribute("onclick") || "";
+      const match = onclickAttr.match(/'([^']+)':'([^']+)'/) || onclickAttr.match(/"([^"]+)":"([^"]+)"/);
+      if (match) {
+        targetParam = match[1];
+      } else if (link.name) {
+        targetParam = link.name;
+      }
+
+      formData.set(targetParam, targetParam);
+      if (link.id && link.id !== targetParam) {
+        formData.set(link.id, link.id);
+      }
+      if (form.id) {
+        formData.set(form.id, form.id);
+      }
+      formData.set("javax.faces.source", targetParam);
+
+      // Asegurar ViewState fresco del DOM si existe
+      const vsInput = form.querySelector('[name="javax.faces.ViewState"]') || document.querySelector('[name="javax.faces.ViewState"]');
+      if (vsInput && vsInput.value) {
+        formData.set("javax.faces.ViewState", vsInput.value);
+      }
+
       const actionUrl = form.action || window.location.href;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+
       const res = await fetch(actionUrl, {
         method: "POST",
         body: formData,
         credentials: "include",
+        signal: controller.signal,
       });
+      clearTimeout(timer);
+
       if (res.ok) {
         const text = await res.text();
         if (isLikelySRIXml(text)) {

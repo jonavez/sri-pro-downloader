@@ -176,11 +176,24 @@ async function executeEmiteSync(tabId) {
     `[SRI Pro] Comprobantes detectados: ${rawInvoices.length}. Iniciando Fase 1: Pre-check.`
   );
 
-  // 3. Fase 1: Pre-check diferencial
+  // 3. Fase 1: Pre-check diferencial (inicializar estado en tiempo real)
   await chrome.storage.local.set({
+    lastEmiteSyncResult: {
+      fecha: new Date().toISOString(),
+      totalAnalizados: rawInvoices.length,
+      totalSincronizadas: 0,
+      totalDuplicadas: 0,
+      totalAnuladas: 0,
+      totalFallidas: 0,
+      notasCredito: 0,
+      fallidosDetalle: [],
+      enProgreso: true,
+      loteActual: 0,
+      totalLotes: 0,
+    },
     emiteSyncState: {
       status: "IN_PROGRESS",
-      progress: 25,
+      progress: 20,
       step: `Verificando ${rawInvoices.length} comprobantes en EMITE.ec...`,
       error: null,
     },
@@ -204,6 +217,31 @@ async function executeEmiteSync(tabId) {
     por_sincronizar = [],
     anuladas_detectadas = [],
   } = preCheckRes.data;
+
+  const totalLotes = Math.ceil(por_sincronizar.length / INGEST_CHUNK_SIZE);
+
+  // Actualizar inmediatamente tras pre-check para mostrar analizados y duplicados en vivo
+  await chrome.storage.local.set({
+    lastEmiteSyncResult: {
+      fecha: new Date().toISOString(),
+      totalAnalizados: rawInvoices.length,
+      totalSincronizadas: 0,
+      totalDuplicadas: duplicadas.length,
+      totalAnuladas: anuladas_detectadas.length,
+      totalFallidas: 0,
+      notasCredito: 0,
+      fallidosDetalle: [],
+      enProgreso: por_sincronizar.length > 0,
+      loteActual: 0,
+      totalLotes: totalLotes,
+    },
+    emiteSyncState: {
+      status: "IN_PROGRESS",
+      progress: 30,
+      step: `Pre-check: ${duplicadas.length} duplicadas, ${por_sincronizar.length} nuevas por sincronizar.`,
+      error: null,
+    },
+  });
 
   console.log(
     `[SRI Pro] Pre-check: ${duplicadas.length} duplicadas, ${por_sincronizar.length} nuevas, ${anuladas_detectadas.length} anuladas.`
@@ -323,11 +361,38 @@ async function executeEmiteSync(tabId) {
       );
     }
 
+    const currentNotasCredito = guardadosTotal.filter((g) => g.cod_doc === "04").length;
+
+    // Actualizar en tiempo real el resultado en almacenamiento local tras cada lote
+    const liveSnapshot = {
+      fecha: new Date().toISOString(),
+      totalAnalizados: rawInvoices.length,
+      totalSincronizadas: guardadosTotal.length,
+      totalDuplicadas: duplicadas.length,
+      totalAnuladas: anuladas_detectadas.length,
+      totalFallidas: fallidosTotal.length,
+      notasCredito: currentNotasCredito,
+      fallidosDetalle: [...fallidosTotal],
+      enProgreso: true,
+      loteActual: idx + 1,
+      totalLotes: chunks.length,
+    };
+
+    await chrome.storage.local.set({
+      lastEmiteSyncResult: liveSnapshot,
+      emiteSyncState: {
+        status: "IN_PROGRESS",
+        progress: chunkPercent,
+        step: `Lote ${idx + 1} de ${chunks.length}: ${guardadosTotal.length} sincronizadas, ${fallidosTotal.length} fallidas...`,
+        error: null,
+      },
+    });
+
     // Breve pausa preventiva entre micro-lotes para descongestionar conexiones
     await new Promise((r) => setTimeout(r, 600));
   }
 
-  // Contar notas de crédito guardadas
+  // Contar notas de crédito guardadas definitivas
   const notasCreditoCount = guardadosTotal.filter(
     (g) => g.cod_doc === "04"
   ).length;
@@ -341,6 +406,9 @@ async function executeEmiteSync(tabId) {
     totalFallidas: fallidosTotal.length,
     notasCredito: notasCreditoCount,
     fallidosDetalle: fallidosTotal,
+    enProgreso: false,
+    loteActual: chunks.length,
+    totalLotes: chunks.length,
   };
 
   await chrome.storage.local.set({
@@ -455,10 +523,10 @@ function handleDownload(url, filename, sendResponse) {
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") {
-    console.log("[SRI Pro] Extensión instalada correctamente (v3.3.1).");
+    console.log("[SRI Pro] Extensión instalada correctamente (v3.3.2).");
   } else if (details.reason === "update") {
     console.log(
-      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.3.1.`
+      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.3.2.`
     );
     filenameQueue.clear();
   }
