@@ -1,4 +1,73 @@
-// content.js - Lógica de extracción e interacción con la página (v3.1)
+// content.js - Logica de extraccion e interaccion con la pagina (v3.2)
+
+/**
+ * Detecta si el contexto actual del portal SRI corresponde a comprobantes
+ * emitidos o recibidos. Analiza la URL, encabezados y elementos del DOM.
+ *
+ * @returns {string} "EMITIDOS" | "RECIBIDOS" | "DESCONOCIDO"
+ */
+function detectarOrigenConsulta() {
+  const url = (window.location.href || "").toLowerCase();
+  const title = (document.title || "").toLowerCase();
+
+  // 1. Analisis por URL (patron mas confiable)
+  if (url.includes("emitido") || url.includes("emitid")) {
+    return "EMITIDOS";
+  }
+  if (url.includes("recibido") || url.includes("recibid")) {
+    return "RECIBIDOS";
+  }
+
+  // 2. Analisis por titulo de pagina
+  if (title.includes("emitido") || title.includes("emitid")) {
+    return "EMITIDOS";
+  }
+  if (title.includes("recibido") || title.includes("recibid")) {
+    return "RECIBIDOS";
+  }
+
+  // 3. Analisis por encabezados visibles en el DOM
+  const encabezados = document.querySelectorAll(
+    "h1, h2, h3, .ui-panel-title, .ui-fieldset-legend, span.ui-outputlabel"
+  );
+  for (const el of encabezados) {
+    const texto = (el.textContent || "").toLowerCase();
+    if (texto.includes("emitido") || texto.includes("emitid")) {
+      return "EMITIDOS";
+    }
+    if (texto.includes("recibido") || texto.includes("recibid")) {
+      return "RECIBIDOS";
+    }
+  }
+
+  // 4. Analisis por breadcrumbs o menus activos de PrimeFaces
+  const breadcrumbs = document.querySelectorAll(
+    ".ui-breadcrumb li, .ui-menuitem-text, .ui-menuitem-link"
+  );
+  for (const el of breadcrumbs) {
+    const texto = (el.textContent || "").toLowerCase();
+    if (texto.includes("emitido") || texto.includes("emitid")) {
+      return "EMITIDOS";
+    }
+    if (texto.includes("recibido") || texto.includes("recibid")) {
+      return "RECIBIDOS";
+    }
+  }
+
+  // 5. Analisis por columnas de la tabla (Receptor/Comprador vs Emisor/Proveedor)
+  const columnas = document.querySelectorAll("th, .ui-column-title");
+  for (const col of columnas) {
+    const texto = (col.textContent || "").toLowerCase();
+    if (texto.includes("receptor") || texto.includes("comprador")) {
+      return "EMITIDOS";
+    }
+    if (texto.includes("emisor") || texto.includes("proveedor")) {
+      return "RECIBIDOS";
+    }
+  }
+
+  return "DESCONOCIDO";
+}
 
 function extractInvoiceData() {
   const logs = [];
@@ -7,7 +76,11 @@ function extractInvoiceData() {
     logs.push(msg);
   };
 
-  log("SRI Pro v3.1: Iniciando extracción robusta...");
+  log("SRI Pro v3.2: Iniciando extraccion robusta...");
+
+  // Detectar contexto de la consulta (emitidos vs recibidos)
+  const origenConsulta = detectarOrigenConsulta();
+  log(`Contexto detectado: ${origenConsulta}`);
 
   const invoices = [];
 
@@ -225,6 +298,7 @@ function extractInvoiceData() {
           iva,
           importeTotal,
           xmlLinkId,
+          origenConsulta,
           rowIndex: index,
         });
       }
@@ -233,8 +307,8 @@ function extractInvoiceData() {
     }
   });
 
-  log(`Proceso completado. ${invoices.length} facturas extraídas.`);
-  return { invoices, total: invoices.length, logs: logs };
+  log(`Proceso completado. ${invoices.length} facturas extraidas (${origenConsulta}).`);
+  return { invoices, total: invoices.length, origenConsulta, logs: logs };
 }
 
 // Simular clic y manejar descarga
@@ -286,8 +360,27 @@ function isLikelySRIXml(text) {
 }
 
 // Obtiene el contenido XML en memoria aprovechando la sesion activa del portal SRI
-async function fetchXMLContent(linkId) {
-  const link = document.getElementById(linkId);
+async function fetchXMLContent(linkId, claveAcceso = null) {
+  let link = linkId ? document.getElementById(linkId) : null;
+
+  // Si no se encuentra por linkId, buscar en la fila que contiene la clave de acceso
+  if (!link && claveAcceso) {
+    const rows = document.querySelectorAll("tr[data-ri], table tbody tr");
+    for (const r of rows) {
+      if (r.textContent && r.textContent.includes(claveAcceso)) {
+        link =
+          r.querySelector('a[id*="lnkXml"]') ||
+          (r.querySelector('img[src*="xml.gif"]')
+            ? r.querySelector('img[src*="xml.gif"]').closest("a")
+            : null) ||
+          Array.from(r.querySelectorAll("a")).find((a) =>
+            (a.textContent || "").includes("XML")
+          );
+        if (link) break;
+      }
+    }
+  }
+
   if (!link) return null;
 
   const href = link.getAttribute("href");
@@ -389,7 +482,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "fetchComprobanteXml") {
-    fetchXMLContent(request.linkId)
+    fetchXMLContent(request.linkId, request.claveAcceso)
       .then((xml) => sendResponse({ xml }))
       .catch((e) => sendResponse({ xml: null, error: e.message }));
     return true;

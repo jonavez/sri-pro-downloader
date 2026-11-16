@@ -1,63 +1,39 @@
-# Guía de Implementación para el Agente Backend (`facturador-ec/api`)
+# Guia de Implementacion para el Agente Backend (`facturador-ec/api`)
 
 **Destinatario**: Agente de Inteligencia Artificial / Desarrollador Backend a cargo de `/Users/jona/emite/facturador-ec/api`  
-**Objetivo**: Implementar los endpoints de la API necesarios para soportar la sincronización directa en 1 clic desde la extensión Chrome `sri-pro-downloader` (v3.3.0).  
-**Contexto**: Los usuarios de EMITE.ec utilizan la extensión mientras consultan comprobantes en el portal del SRI en Línea. La extensión enviará solicitudes autenticadas vía `X-API-Key` para consultar duplicados e ingestar comprobantes recibidos de proveedores.
+**Version**: 2.0.0 (Soporte Dual: Comprobantes Emitidos y Recibidos)  
+**Objetivo**: Implementar el soporte para sincronizar tanto comprobantes **Recibidos** como **Emitidos** (ventas) desde la extension Chrome `sri-pro-downloader` (v3.4.0).  
 
 ---
 
-## 1. Resumen de Requerimientos Backend
+## 1. Diagnostico de Errores Reportados y Causa Raiz
 
-Debes implementar **3 endpoints** en `app/api/endpoints/facturas_recibidas.py` (o en un nuevo router `app/api/endpoints/sincronizacion_extension.py` registrado en `app/api/api.py`):
-
-1. `GET /api/v1/facturas-recibidas/sincronizar/verificar-conexion`: Comprueba que la API Key sea válida y retorna datos de la empresa tenant.
-2. `POST /api/v1/facturas-recibidas/sincronizar/pre-check`: Compara un lote de claves contra la base de datos para identificar duplicadas, anuladas y nuevas.
-3. `POST /api/v1/facturas-recibidas/sincronizar/ingestar-claves`: Ingesta un micro-lote de hasta 5 claves consultando el servicio SOAP del SRI y guardando en `FacturaRecibida`.
-4. `POST /api/v1/facturas-recibidas/sincronizar/actualizar-anuladas`: Actualiza el estado a `ANULADA` de comprobantes reportados como anulados en el portal.
-
----
-
-## 2. Autenticación y Dependencias
-
-Utiliza la dependencia híbrida existente:
-```python
-from app.api import deps
-# Dependencia de autenticación: soporta X-API-Key: <key> y Bearer JWT
-# deps.get_current_tenant_or_api_key retorna la instancia del modelo Empresa (tenant actual)
+### Error A: Rechazo por Aislamiento Multi-Tenant en Facturas Emitidas
+```text
+Causa del fallo: El comprobante fue emitido a 9999999999999, no a CHAVEZ CARPIO JONATHAN DIONICIO (2200345284001) | El comprobante fue emitido a EXTERIOR, no a CHAVEZ CARPIO JONATHAN DIONICIO (2200345284001)
 ```
+- **Causa Raiz**: En `api/app/api/endpoints/sincronizacion_extension.py` (linea 249), la validacion multi-tenant actual evalua:
+  `identificacion_corresponde(leido.receptor_identificacion, empresa.ruc)`
+  Esto es correcto **exclusivamente para comprobantes recibidos** (donde el tenant es el comprador/receptor).
+  En **comprobantes emitidos** (ventas), el tenant es el **emisor** (`leido.emisor_ruc`), mientras que el receptor es el cliente (`9999999999999` consumidor final, cliente del exterior, o cedula/RUC de terceros). Por ende, la validacion actual rechaza erroneamente todas las ventas emitidas.
 
----
-
-## 3. Especificación Detallada de Endpoints
-
-### Endpoint 0: `GET /api/v1/facturas-recibidas/sincronizar/verificar-conexion`
-
-```python
-@router.get("/sincronizar/verificar-conexion")
-async def verificar_conexion_extension(
-    empresa: Empresa = Depends(deps.get_current_tenant_or_api_key),
-):
-    """Verifica la validez de la API Key y retorna el tenant asociado."""
-    return {
-        "valido": True,
-        "empresa_id": empresa.id,
-        "ruc": empresa.ruc,
-        "razon_social": empresa.razon_social,
-        "ambiente_sri": empresa.ambiente_sri or 2,
-    }
+### Error B: SRI SOAP Offline / RECHAZADA
+```text
+Causa del fallo: El SRI reporta estado: RECHAZADA (WAF/SOAP offline)
 ```
+- **Causa Raiz**: Ocurre cuando el backend no recibe `xml_content` en la solicitud de ingesta y recurre a la llamada SOAP remota `cliente.autorizar_comprobante(clave)`. Los servidores del SRI (`cel.sri.gob.ec`) bloquean frecuentemente IPs de centros de datos extranjeros (WAF de Cloudflare/SRI) o presentan timeouts.
+- **Solucion**: La extension v3.4.0 ahora extrae el XML directamente de la sesion autenticada del navegador del usuario en el SRI mediante `executeScript` multi-frame. El backend debe **priorizar siempre el `xml_content` recibido** y parsearlo con `leer_comprobante()`, omitiendo por completo la llamada SOAP cuando el XML esta presente.
 
 ---
 
-### Endpoint 1: `POST /api/v1/facturas-recibidas/sincronizar/pre-check`
+## 2. Requerimientos de Implementacion en Backend (`facturador-ec/api`)
 
-**Propósito**: Evitar descargas o consultas redundantes filtrando comprobantes ya existentes en milisegundos.
+Los cambios se deben aplicar en:
+[`api/app/api/endpoints/sincronizacion_extension.py`](file:///Users/jona/emite/facturador-ec/api/app/api/endpoints/sincronizacion_extension.py)
 
-**Esquemas Pydantic**:
+### 2.1 Actualizacion de Esquemas Pydantic
+
 ```python
-from pydantic import BaseModel, Field
-from typing import List, Optional
-
 class ItemComprobantePreCheck(BaseModel):
     clave_acceso: str = Field(..., min_length=49, max_length=49)
     cod_doc: str = Field(..., min_length=2, max_length=2)
@@ -66,12 +42,35 @@ class ItemComprobantePreCheck(BaseModel):
     total: float
     fecha_emision: str
     estado_portal: Optional[str] = "AUTORIZADO"
+    es_emitido: Optional[bool] = False
+
 
 class PreCheckRequest(BaseModel):
     comprobantes: List[ItemComprobantePreCheck]
+    tipo_sincronizacion: Optional[str] = "RECIBIDOS"  # "RECIBIDOS" o "EMITIDOS"
+
+
+class ItemComprobanteIngesta(BaseModel):
+    clave_acceso: str
+    xml_content: Optional[str] = None
+    ambiente: Optional[int] = 2
+
+
+class IngestarClavesRequest(BaseModel):
+    claves_acceso: Optional[List[str]] = None
+    comprobantes: Optional[List[ItemComprobanteIngesta]] = None
+    ambiente: Optional[int] = 2
+    tipo_sincronizacion: Optional[str] = "RECIBIDOS"  # "RECIBIDOS" o "EMITIDOS"
 ```
 
-**Implementación**:
+---
+
+### 2.2 Endpoint `POST /api/v1/facturas-recibidas/sincronizar/pre-check`
+
+Cuando `tipo_sincronizacion == "EMITIDOS"`:
+1. Buscar duplicados en la tabla `comprobantes` (modelo `Comprobante`) donde `tenant_id == empresa.id` y `estado != 'RECHAZADA'`.
+2. Las claves no encontradas van a `por_sincronizar`.
+
 ```python
 @router.post("/sincronizar/pre-check")
 async def pre_check_comprobantes(
@@ -79,7 +78,9 @@ async def pre_check_comprobantes(
     db: Session = Depends(deps.get_db),
     empresa: Empresa = Depends(deps.get_current_tenant_or_api_key),
 ):
-    """Compara en base de datos las claves enviadas para clasificar duplicadas, anuladas y nuevas."""
+    """Compara en base de datos las claves enviadas para clasificar duplicadas, anuladas y nuevas.
+    Soporta tanto comprobantes RECIBIDOS como EMITIDOS.
+    """
     claves = [c.clave_acceso for c in request.comprobantes]
     if not claves:
         return {
@@ -87,65 +88,101 @@ async def pre_check_comprobantes(
             "duplicadas": [],
             "por_sincronizar": [],
             "anuladas_detectadas": [],
-            "resumen": {"total": 0, "duplicadas_count": 0, "por_sincronizar_count": 0, "anuladas_count": 0}
+            "resumen": {
+                "total": 0,
+                "duplicadas_count": 0,
+                "por_sincronizar_count": 0,
+                "anuladas_count": 0,
+            },
         }
 
-    # 1. Consultar facturas recibidas existentes de esta empresa
-    existentes_db = db.execute(
-        select(FacturaRecibida.clave_acceso, FacturaRecibida.estado_sri)
-        .where(
-            FacturaRecibida.tenant_id == empresa.id,
-            FacturaRecibida.clave_acceso.in_(claves)
-        )
-    ).all()
-    mapa_existentes = {row[0]: row[1] for row in existentes_db}
-
-    # 2. Consultar comprobantes emitidos internamente hacia este RUC (ventas locales de otros tenants)
-    internas_db = db.execute(
-        select(Comprobante.clave_acceso)
-        .join(Cliente, Comprobante.cliente_id == Cliente.id)
-        .where(
-            Cliente.identificacion == empresa.ruc,
-            Comprobante.clave_acceso.in_(claves),
-            Comprobante.estado == "AUTORIZADA"
-        )
-    ).scalars().all()
-    set_internas = set(internas_db)
+    es_emitidos = request.tipo_sincronizacion == "EMITIDOS"
 
     duplicadas = []
     por_sincronizar = []
     anuladas_detectadas = []
 
-    for c in request.comprobantes:
-        clave = c.clave_acceso
-        if clave in mapa_existentes:
-            estado_actual = mapa_existentes[clave]
-            # Si en DB estaba AUTORIZADA pero el portal SRI la reporta como ANULADO
-            if c.estado_portal == "ANULADO" and estado_actual != "ANULADA":
-                anuladas_detectadas.append({
-                    "clave_acceso": clave,
-                    "estado_anterior": estado_actual,
-                    "estado_portal": "ANULADO"
-                })
-            else:
+    if es_emitidos:
+        # Pre-check para facturas emitidas: consultar tabla comprobantes
+        existentes_db = db.execute(
+            select(Comprobante.clave_acceso, Comprobante.estado).where(
+                Comprobante.tenant_id == empresa.id,
+                Comprobante.clave_acceso.in_(claves),
+                Comprobante.estado != "RECHAZADA",
+            )
+        ).all()
+        mapa_existentes = {row[0]: row[1] for row in existentes_db}
+
+        for c in request.comprobantes:
+            clave = c.clave_acceso
+            if clave in mapa_existentes:
                 duplicadas.append({
                     "clave_acceso": clave,
-                    "origen": "facturas_recibidas",
-                    "estado_actual": estado_actual
+                    "origen": "comprobantes_emitidos",
+                    "estado_actual": mapa_existentes[clave],
                 })
-        elif clave in set_internas:
-            duplicadas.append({
-                "clave_acceso": clave,
-                "origen": "sistema_interno",
-                "estado_actual": "AUTORIZADA"
-            })
-        else:
-            por_sincronizar.append({
-                "clave_acceso": clave,
-                "cod_doc": c.cod_doc,
-                "emisor_ruc": c.emisor_ruc,
-                "total": c.total
-            })
+            else:
+                por_sincronizar.append({
+                    "clave_acceso": clave,
+                    "cod_doc": c.cod_doc,
+                    "emisor_ruc": c.emisor_ruc,
+                    "total": c.total,
+                })
+    else:
+        # Pre-check para facturas recibidas (comportamiento existente)
+        existentes_db = db.execute(
+            select(FacturaRecibida.clave_acceso, FacturaRecibida.estado_sri).where(
+                FacturaRecibida.tenant_id == empresa.id,
+                FacturaRecibida.clave_acceso.in_(claves),
+            )
+        ).all()
+        mapa_existentes = {row[0]: row[1] for row in existentes_db}
+
+        internas_db = (
+            db.execute(
+                select(Comprobante.clave_acceso)
+                .join(Cliente, Comprobante.cliente_id == Cliente.id)
+                .where(
+                    Cliente.identificacion == empresa.ruc,
+                    Comprobante.clave_acceso.in_(claves),
+                    Comprobante.estado == "AUTORIZADA",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        set_internas = set(internas_db)
+
+        for c in request.comprobantes:
+            clave = c.clave_acceso
+            if clave in mapa_existentes:
+                estado_actual = mapa_existentes[clave]
+                estado_portal_limpio = (c.estado_portal or "").strip().upper()
+                if estado_portal_limpio in ("ANULADO", "ANULADA") and estado_actual != "ANULADA":
+                    anuladas_detectadas.append({
+                        "clave_acceso": clave,
+                        "estado_anterior": estado_actual,
+                        "estado_portal": "ANULADO",
+                    })
+                else:
+                    duplicadas.append({
+                        "clave_acceso": clave,
+                        "origen": "facturas_recibidas",
+                        "estado_actual": estado_actual,
+                    })
+            elif clave in set_internas:
+                duplicadas.append({
+                    "clave_acceso": clave,
+                    "origen": "sistema_interno",
+                    "estado_actual": "AUTORIZADA",
+                })
+            else:
+                por_sincronizar.append({
+                    "clave_acceso": clave,
+                    "cod_doc": c.cod_doc,
+                    "emisor_ruc": c.emisor_ruc,
+                    "total": c.total,
+                })
 
     return {
         "total_analizados": len(request.comprobantes),
@@ -156,136 +193,230 @@ async def pre_check_comprobantes(
             "total": len(request.comprobantes),
             "duplicadas_count": len(duplicadas),
             "por_sincronizar_count": len(por_sincronizar),
-            "anuladas_count": len(anuladas_detectadas)
-        }
+            "anuladas_count": len(anuladas_detectadas),
+        },
     }
 ```
 
 ---
 
-### Endpoint 2: `POST /api/v1/facturas-recibidas/sincronizar/ingestar-claves`
+### 2.3 Endpoint `POST /api/v1/facturas-recibidas/sincronizar/ingestar-claves`
 
-**Propósito**: Recibe un micro-lote de hasta 5 claves, consulta el servicio SOAP del SRI (`ClienteSoapSRI`), parsea el XML con `leer_comprobante()` y lo inserta en `FacturaRecibida`.
+Cuando `tipo_sincronizacion == "EMITIDOS"`:
+1. **Validacion Multi-Tenant Invertida**: Validar que el **emisor** coincida con la empresa activa:
+   `identificacion_corresponde(leido.emisor_ruc, empresa.ruc)`
+2. **Ingesta en Venta**: Delegar a `ServicioImportacionEmitidas.importar(...)` existente en `app.services.facturacion.importador_comprobantes`.
 
-**Reglas de Seguridad y Estabilidad**:
-- Máximo 5 claves por petición para evitar timeouts de Nginx/Cloudflare.
-- Validar `identificacion_corresponde(leido.receptor_identificacion, empresa.ruc)`.
-- Si `cod_doc == '04'` (Nota de crédito), no anular la factura original; registrar la nota de crédito y asociar la referencia.
-- NO marcar facturas como `ANULADA` si SOAP devuelve `numeroComprobantes == 0` (suele ser desfase de replicación del SRI).
-
-**Esquemas Pydantic**:
 ```python
-class IngestarClavesRequest(BaseModel):
-    claves_acceso: List[str] = Field(..., max_items=5)
-    ambiente: Optional[int] = 2
-```
-
-**Implementación**:
-```python
-from app.services.sri.cliente_soap import ClienteSoapSRI
-from app.services.sri.lector_comprobante import leer_comprobante, identificacion_corresponde
+from app.services.facturacion.importador_comprobantes import ServicioImportacionEmitidas
 
 @router.post("/sincronizar/ingestar-claves")
-async def ingestar_claves_sri(
+def ingestar_claves_sri(
     request: IngestarClavesRequest,
     db: Session = Depends(deps.get_db),
     empresa: Empresa = Depends(deps.get_current_tenant_or_api_key),
 ):
-    """Consulta al SRI e ingesta hasta 5 comprobantes por llamada."""
-    if len(request.claves_acceso) > 5:
+    """Consulta al SRI o procesa directamente XML e ingesta comprobantes.
+    Soporta comprobantes RECIBIDOS y comprobantes EMITIDOS.
+    """
+    items: List[ItemComprobanteIngesta] = []
+    if request.comprobantes:
+        items.extend(request.comprobantes)
+    elif request.claves_acceso:
+        for c in request.claves_acceso:
+            items.append(ItemComprobanteIngesta(clave_acceso=c, ambiente=request.ambiente or 2))
+
+    if len(items) > 5:
         raise HTTPException(
             status_code=422,
-            detail="Por seguridad y tolerancia a timeouts, se permite un máximo de 5 claves por lote."
+            detail="Por seguridad y tolerancia a timeouts, se permite un maximo de 5 comprobantes por lote.",
         )
 
-    cliente = ClienteSoapSRI(ambiente=request.ambiente or empresa.ambiente_sri or 2)
+    es_emitidos = request.tipo_sincronizacion == "EMITIDOS"
+    cliente = None
     guardados = []
     fallidos = []
 
-    for clave in request.claves_acceso:
+    for item in items:
+        clave = item.clave_acceso
+        xml_directo = item.xml_content
         try:
-            # 1. Consulta SOAP al SRI
-            resp = cliente.autorizar_comprobante(clave)
-            estado = (resp.get("estado") or "").strip().upper()
-            xml_bytes_str = resp.get("xml_autorizado")
+            resp = {}
+            if xml_directo:
+                xml_bytes_str = xml_directo
+                estado = "AUTORIZADO"
+            else:
+                if cliente is None:
+                    cliente = ClienteSoapSRI(
+                        ambiente=item.ambiente or request.ambiente or empresa.ambiente_sri or 2,
+                        timeout=8
+                    )
+                try:
+                    resp = cliente.autorizar_comprobante(clave, reintentar=False)
+                except Exception as e_soap:
+                    logger.warning(f"Error o timeout consultando SOAP SRI para clave {clave}: {e_soap}")
+                    fallidos.append({
+                        "clave_acceso": clave,
+                        "error": "El SRI no responde a tiempo (timeout SOAP)",
+                        "reintentable": True,
+                    })
+                    continue
 
-            if estado != "AUTORIZADO" or not xml_bytes_str:
-                fallidos.append({
-                    "clave_acceso": clave,
-                    "error": f"El SRI reporta estado: {estado or 'SIN RESPUESTA'}",
-                    "reintentable": True
-                })
-                continue
+                estado = (resp.get("estado") or "").strip().upper()
+                xml_bytes_str = resp.get("xml_autorizado")
 
-            # 2. Parseo del XML
-            leido = leer_comprobante(xml_bytes_str.encode("utf-8") if isinstance(xml_bytes_str, str) else xml_bytes_str)
+                if estado != "AUTORIZADO" or not xml_bytes_str:
+                    fallidos.append({
+                        "clave_acceso": clave,
+                        "error": f"El SRI reporta estado: {estado or 'SIN RESPUESTA'} (WAF/SOAP offline)",
+                        "reintentable": True,
+                    })
+                    continue
 
-            # 3. Validación de Aislamiento Multi-Tenant (RUC receptor)
-            if not identificacion_corresponde(leido.receptor_identificacion, empresa.ruc):
-                fallidos.append({
-                    "clave_acceso": clave,
-                    "error": f"El comprobante fue emitido a {leido.receptor_identificacion}, no a {empresa.razon_social} ({empresa.ruc})",
-                    "reintentable": False
-                })
-                continue
+            # Parseo del XML seguro
+            xml_bytes = xml_bytes_str.encode("utf-8") if isinstance(xml_bytes_str, str) else xml_bytes_str
+            leido = leer_comprobante(xml_bytes)
 
-            # 4. Inserción idempotente
-            existente = db.execute(
-                select(FacturaRecibida).where(
-                    FacturaRecibida.tenant_id == empresa.id,
-                    FacturaRecibida.clave_acceso == clave
+            if es_emitidos:
+                # -------------------------------------------------------------
+                # FLUJO EMITIDOS (VENTAS)
+                # -------------------------------------------------------------
+                # 1. Validacion multi-tenant: el emisor DEBE ser la empresa
+                if not identificacion_corresponde(leido.emisor_ruc, empresa.ruc):
+                    fallidos.append({
+                        "clave_acceso": clave,
+                        "error": f"El comprobante fue emitido por {leido.emisor_ruc}, no por {empresa.razon_social} ({empresa.ruc})",
+                        "reintentable": False,
+                    })
+                    continue
+
+                # 2. Ingesta via ServicioImportacionEmitidas
+                n_importadas, n_duplicadas, msgs, ids = ServicioImportacionEmitidas.importar(
+                    db=db,
+                    empresa=empresa,
+                    contenido=xml_bytes,
+                    nombre_archivo=f"{clave}.xml",
+                    retornar_ids=True,
                 )
-            ).scalar_one_or_none()
 
-            if existente:
-                guardados.append({
-                    "clave_acceso": clave,
-                    "numero": existente.clave_acceso,
-                    "proveedor": existente.proveedor_nombre,
-                    "cod_doc": existente.cod_doc,
-                    "total": float(existente.total),
-                    "estado_sri": existente.estado_sri,
-                    "duplicado": True
-                })
-                continue
+                if n_importadas > 0:
+                    guardados.append({
+                        "clave_acceso": clave,
+                        "numero": leido.clave_acceso,
+                        "proveedor": leido.receptor_razon_social or "Consumidor Final",
+                        "cod_doc": leido.cod_doc,
+                        "total": float(leido.total),
+                        "estado_sri": leido.estado or "AUTORIZADA",
+                        "duplicado": False,
+                    })
+                elif n_duplicadas > 0:
+                    guardados.append({
+                        "clave_acceso": clave,
+                        "numero": leido.clave_acceso,
+                        "proveedor": leido.receptor_razon_social or "Consumidor Final",
+                        "cod_doc": leido.cod_doc,
+                        "total": float(leido.total),
+                        "estado_sri": leido.estado or "AUTORIZADA",
+                        "duplicado": True,
+                    })
+                else:
+                    fallidos.append({
+                        "clave_acceso": clave,
+                        "error": msgs[0] if msgs else "No se pudo importar comprobante emitido",
+                        "reintentable": False,
+                    })
+            else:
+                # -------------------------------------------------------------
+                # FLUJO RECIBIDOS (COMPRAS) - COMPORTAMIENTO EXISTENTE
+                # -------------------------------------------------------------
+                if not identificacion_corresponde(leido.receptor_identificacion, empresa.ruc):
+                    fallidos.append({
+                        "clave_acceso": clave,
+                        "error": f"El comprobante fue emitido a {leido.receptor_identificacion}, no a {empresa.razon_social} ({empresa.ruc})",
+                        "reintentable": False,
+                    })
+                    continue
 
-            nueva = FacturaRecibida(
-                tenant_id=empresa.id,
-                proveedor_identificacion=leido.emisor_ruc,
-                proveedor_nombre=leido.emisor_razon_social or "Proveedor sin razón social",
-                clave_acceso=leido.clave_acceso,
-                cod_doc=leido.cod_doc,
-                version_xml=leido.version,
-                fecha_emision=leido.fecha_emision,
-                total=leido.total,
-                estado_sri=leido.estado,
-                numero_autorizacion=leido.numero_autorizacion,
-                fecha_autorizacion=leido.fecha_autorizacion,
-                ambiente=leido.ambiente,
-                verificado_en_sri=True,
-                fecha_verificacion_sri=ahora_utc(),
-                xml_documento=xml_bytes_str if isinstance(xml_bytes_str, str) else xml_bytes_str.decode("utf-8", errors="replace"),
-            )
-            db.add(nueva)
-            db.commit()
-            db.refresh(nueva)
+                existente = db.execute(
+                    select(FacturaRecibida).where(
+                        FacturaRecibida.tenant_id == empresa.id,
+                        FacturaRecibida.clave_acceso == clave,
+                    )
+                ).scalar_one_or_none()
 
-            guardados.append({
-                "clave_acceso": clave,
-                "numero": leido.clave_acceso,
-                "proveedor": nueva.proveedor_nombre,
-                "cod_doc": nueva.cod_doc,
-                "total": float(nueva.total),
-                "estado_sri": nueva.estado_sri,
-                "duplicado": False
-            })
+                if existente:
+                    guardados.append({
+                        "clave_acceso": clave,
+                        "numero": existente.clave_acceso,
+                        "proveedor": existente.proveedor_nombre,
+                        "cod_doc": existente.cod_doc,
+                        "total": float(existente.total),
+                        "estado_sri": existente.estado_sri,
+                        "duplicado": True,
+                    })
+                    continue
+
+                fecha_aut = leido.fecha_autorizacion
+                if not fecha_aut and resp.get("fecha_autorizacion"):
+                    fecha_aut = interpretar_fecha_hora(str(resp.get("fecha_autorizacion")))
+                if not fecha_aut:
+                    fecha_aut = ahora_utc()
+
+                nueva = FacturaRecibida(
+                    tenant_id=empresa.id,
+                    proveedor_identificacion=leido.emisor_ruc,
+                    proveedor_nombre=leido.emisor_razon_social or "Proveedor sin razon social",
+                    clave_acceso=leido.clave_acceso,
+                    cod_doc=leido.cod_doc,
+                    version_xml=leido.version,
+                    fecha_emision=leido.fecha_emision or ahora_utc(),
+                    total=leido.total,
+                    estado_sri=leido.estado or "AUTORIZADA",
+                    numero_autorizacion=leido.numero_autorizacion or resp.get("numero_autorizacion") or clave,
+                    fecha_autorizacion=fecha_aut,
+                    ambiente=leido.ambiente or resp.get("ambiente") or item.ambiente or request.ambiente or 2,
+                    verificado_en_sri=True,
+                    fecha_verificacion_sri=ahora_utc(),
+                    xml_documento=xml_bytes_str if isinstance(xml_bytes_str, str) else xml_bytes_str.decode("utf-8", errors="replace"),
+                )
+                db.add(nueva)
+                try:
+                    db.commit()
+                    db.refresh(nueva)
+                    guardados.append({
+                        "clave_acceso": clave,
+                        "numero": leido.clave_acceso,
+                        "proveedor": nueva.proveedor_nombre,
+                        "cod_doc": nueva.cod_doc,
+                        "total": float(nueva.total),
+                        "estado_sri": nueva.estado_sri,
+                        "duplicado": False,
+                    })
+                except IntegrityError:
+                    db.rollback()
+                    existente = db.execute(
+                        select(FacturaRecibida).where(
+                            FacturaRecibida.tenant_id == empresa.id,
+                            FacturaRecibida.clave_acceso == clave,
+                        )
+                    ).scalar_one_or_none()
+                    guardados.append({
+                        "clave_acceso": clave,
+                        "numero": clave,
+                        "proveedor": existente.proveedor_nombre if existente else (leido.emisor_razon_social or "Proveedor sin razon social"),
+                        "cod_doc": existente.cod_doc if existente else leido.cod_doc,
+                        "total": float(existente.total) if existente else float(leido.total),
+                        "estado_sri": existente.estado_sri if existente else leido.estado,
+                        "duplicado": True,
+                    })
 
         except Exception as exc:
             db.rollback()
+            logger.warning("Fallo al ingestar clave %s: %s", clave, exc)
             fallidos.append({
                 "clave_acceso": clave,
                 "error": str(exc),
-                "reintentable": True
+                "reintentable": True,
             })
 
     return {
@@ -293,57 +424,15 @@ async def ingestar_claves_sri(
         "guardados": guardados,
         "fallidos": fallidos,
         "total_guardados": len(guardados),
-        "total_fallidos": len(fallidos)
+        "total_fallidos": len(fallidos),
     }
 ```
 
 ---
 
-### Endpoint 3: `POST /api/v1/facturas-recibidas/sincronizar/actualizar-anuladas`
+## 3. Pruebas Unitarias para el Backend
 
-**Propósito**: Actualiza de forma segura el estado de comprobantes del tenant que fueron anulados en el SRI.
-
-```python
-class ActualizarAnuladasRequest(BaseModel):
-    claves_acceso: List[str] = Field(..., max_items=50)
-    motivo: Optional[str] = "Detectado como anulado en portal SRI vía extensión"
-
-@router.post("/sincronizar/actualizar-anuladas")
-async def actualizar_facturas_anuladas(
-    request: ActualizarAnuladasRequest,
-    db: Session = Depends(deps.get_db),
-    empresa: Empresa = Depends(deps.get_current_tenant_or_api_key),
-):
-    """Actualiza a ANULADA los comprobantes indicados, asegurando aislamiento multi-tenant."""
-    facturas = db.execute(
-        select(FacturaRecibida).where(
-            FacturaRecibida.tenant_id == empresa.id,
-            FacturaRecibida.clave_acceso.in_(request.claves_acceso)
-        )
-    ).scalars().all()
-
-    actualizadas = []
-    for f in facturas:
-        if f.estado_sri != "ANULADA":
-            f.estado_sri = "ANULADA"
-            actualizadas.append(f.clave_acceso)
-
-    db.commit()
-
-    return {
-        "mensaje": f"Se actualizaron {len(actualizadas)} comprobantes a estado ANULADA",
-        "total_actualizadas": len(actualizadas),
-        "claves_actualizadas": actualizadas
-    }
-```
-
----
-
-## 4. Pruebas y Validación Recomendadas
-
-1. Ejecuta la suite de pruebas existente: `pytest tests/test_facturas_recibidas.py`.
-2. Crea pruebas unitarias en `tests/test_sincronizacion_extension.py` verificando:
-   - Autenticación con `X-API-Key`.
-   - Pre-check identificando facturas ya existentes y nuevas.
-   - Ingesta de chunk de 5 comprobantes con mock de `ClienteSoapSRI`.
-   - Rechazo de facturas cuyo RUC receptor no pertenezca a la empresa (`403 Forbidden`).
+En `api/tests/test_sincronizacion_extension.py`, anadir:
+1. `test_pre_check_comprobantes_emitidos`: Verifica que al enviar `tipo_sincronizacion="EMITIDOS"`, consulte la tabla `Comprobante` y clasifique correctamente duplicadas y por sincronizar.
+2. `test_ingestar_comprobante_emitido_valido`: Verifica que un XML de factura emitida donde `emisor_ruc == empresa.ruc` y `receptor = "9999999999999"` se procese exitosamente usando `ServicioImportacionEmitidas`.
+3. `test_ingestar_comprobante_emitido_emisor_invalido`: Verifica que si el `emisor_ruc` no pertenece al tenant, se rechace adecuadamente.

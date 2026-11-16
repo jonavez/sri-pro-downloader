@@ -48,6 +48,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const emiteConfigStatus = document.getElementById("emiteConfigStatus");
 
   let currentInvoices = [];
+  let currentOrigenConsulta = "DESCONOCIDO";
 
   /**
    * Oculta y resetea todos los datos previos mostrados en la interfaz.
@@ -55,6 +56,7 @@ document.addEventListener("DOMContentLoaded", function () {
    */
   function resetPreviousData() {
     currentInvoices = [];
+    currentOrigenConsulta = "DESCONOCIDO";
     totalInvoicesEl.textContent = "0";
     totalAmountEl.textContent = "$0.00";
 
@@ -107,7 +109,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     try {
-      logDebug("v3.1: Intentando comunicación vía mensaje...");
+      logDebug("v3.2: Intentando comunicacion via mensaje...");
       try {
         const response = await chrome.tabs.sendMessage(tab.id, {
           action: "extractInvoices",
@@ -115,6 +117,10 @@ document.addEventListener("DOMContentLoaded", function () {
         if (response) {
           logDebug("Respuesta recibida.");
           if (response.logs) response.logs.forEach((l) => logDebug(l));
+          if (response.origenConsulta) {
+            currentOrigenConsulta = response.origenConsulta;
+            logDebug(`Origen detectado: ${currentOrigenConsulta}`);
+          }
 
           if (response.error) {
             logDebug("Error: " + response.error);
@@ -142,6 +148,9 @@ document.addEventListener("DOMContentLoaded", function () {
           frameResult.result.invoices.length > 0
         ) {
           foundInvoices = foundInvoices.concat(frameResult.result.invoices);
+          if (frameResult.result.origenConsulta && frameResult.result.origenConsulta !== "DESCONOCIDO") {
+            currentOrigenConsulta = frameResult.result.origenConsulta;
+          }
           if (frameResult.result.logs)
             frameResult.result.logs.forEach((l) => logDebug("[Inj] " + l));
         } else if (frameResult.result && frameResult.result.logs) {
@@ -149,10 +158,10 @@ document.addEventListener("DOMContentLoaded", function () {
         }
       }
 
-      logDebug(`Inyección completada. Encontradas: ${foundInvoices.length}`);
+      logDebug(`Inyeccion completada. Encontradas: ${foundInvoices.length} (${currentOrigenConsulta})`);
 
       if (foundInvoices.length > 0) {
-        // Eliminar duplicados por número de factura
+        // Eliminar duplicados por numero de factura
         const uniqueInvoices = Array.from(
           new Map(foundInvoices.map((item) => [item.numero, item])).values()
         );
@@ -202,9 +211,9 @@ document.addEventListener("DOMContentLoaded", function () {
     debugLog.classList.add("hidden");
   }
 
-  // ─── Función Inyectada v3.1 (misma lógica robusta que content.js) ───
-  // NOTA: Esta función se inyecta en la página vía chrome.scripting.executeScript
-  // y no puede importar módulos. Por eso la lógica de extracción está duplicada.
+  // ─── Funcion Inyectada v3.2 (misma logica robusta que content.js) ───
+  // NOTA: Esta funcion se inyecta en la pagina via chrome.scripting.executeScript
+  // y no puede importar modulos. Por eso la logica de extraccion esta duplicada.
 
   function extractInvoicesFromPage() {
     const logs = [];
@@ -214,6 +223,66 @@ document.addEventListener("DOMContentLoaded", function () {
     };
 
     try {
+      // Detectar contexto emitidos vs recibidos (inline por inyeccion)
+      let origenConsulta = "DESCONOCIDO";
+      const urlLower = (window.location.href || "").toLowerCase();
+      const titleLower = (document.title || "").toLowerCase();
+      if (urlLower.includes("emitido") || urlLower.includes("emitid")) {
+        origenConsulta = "EMITIDOS";
+      } else if (urlLower.includes("recibido") || urlLower.includes("recibid")) {
+        origenConsulta = "RECIBIDOS";
+      } else if (titleLower.includes("emitido") || titleLower.includes("emitid")) {
+        origenConsulta = "EMITIDOS";
+      } else if (titleLower.includes("recibido") || titleLower.includes("recibid")) {
+        origenConsulta = "RECIBIDOS";
+      } else {
+        const encabezados = document.querySelectorAll(
+          "h1, h2, h3, .ui-panel-title, .ui-fieldset-legend, span.ui-outputlabel"
+        );
+        for (const el of encabezados) {
+          const texto = (el.textContent || "").toLowerCase();
+          if (texto.includes("emitido") || texto.includes("emitid")) {
+            origenConsulta = "EMITIDOS";
+            break;
+          }
+          if (texto.includes("recibido") || texto.includes("recibid")) {
+            origenConsulta = "RECIBIDOS";
+            break;
+          }
+        }
+        if (origenConsulta === "DESCONOCIDO") {
+          const breadcrumbs = document.querySelectorAll(
+            ".ui-breadcrumb li, .ui-menuitem-text, .ui-menuitem-link"
+          );
+          for (const el of breadcrumbs) {
+            const texto = (el.textContent || "").toLowerCase();
+            if (texto.includes("emitido") || texto.includes("emitid")) {
+              origenConsulta = "EMITIDOS";
+              break;
+            }
+            if (texto.includes("recibido") || texto.includes("recibid")) {
+              origenConsulta = "RECIBIDOS";
+              break;
+            }
+          }
+        }
+        if (origenConsulta === "DESCONOCIDO") {
+          const columnas = document.querySelectorAll("th, .ui-column-title");
+          for (const col of columnas) {
+            const texto = (col.textContent || "").toLowerCase();
+            if (texto.includes("receptor") || texto.includes("comprador")) {
+              origenConsulta = "EMITIDOS";
+              break;
+            }
+            if (texto.includes("emisor") || texto.includes("proveedor")) {
+              origenConsulta = "RECIBIDOS";
+              break;
+            }
+          }
+        }
+      }
+      log(`Inj: Contexto detectado: ${origenConsulta}`);
+
       const invoices = [];
       // Selector robusto para filas PrimeFaces
       let rows = document.querySelectorAll("tr[data-ri]");
@@ -389,6 +458,7 @@ document.addEventListener("DOMContentLoaded", function () {
               iva,
               importeTotal,
               xmlLinkId,
+              origenConsulta,
             });
           }
         } catch (e) {
@@ -396,7 +466,7 @@ document.addEventListener("DOMContentLoaded", function () {
         }
       });
 
-      return { invoices, count: invoices.length, logs: logs };
+      return { invoices, count: invoices.length, origenConsulta, logs: logs };
     } catch (e) {
       return { error: e.message, logs: [e.message] };
     }
@@ -578,7 +648,12 @@ document.addEventListener("DOMContentLoaded", function () {
       emiteConnectionBadge.className = "connection-badge badge--connected";
       emiteConfigStatus.textContent = `Conexión exitosa con ${companyName}`;
       emiteConfigStatus.classList.add("config-status--success");
-      chrome.storage.local.set({ emiteApiUrl: url, emiteApiKey: key });
+      chrome.storage.local.set({
+        emiteApiUrl: url,
+        emiteApiKey: key,
+        tenantRuc: res.data.ruc || "",
+        tenantRazonSocial: res.data.razon_social || "",
+      });
     } else {
       emiteConnectionBadge.textContent = "Error";
       emiteConnectionBadge.className = "connection-badge badge--disconnected";
@@ -613,23 +688,28 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
-    // Inicializar visualmente la tarjeta de sincronización en tiempo real de inmediato
+    // Determinar etiqueta segun contexto
+    const esEmitidos = currentOrigenConsulta === "EMITIDOS";
+    const etiquetaOrigen = esEmitidos ? "emitidos" : "recibidos";
+
+    // Inicializar visualmente la tarjeta de sincronizacion en tiempo real de inmediato
     syncResultCard.classList.remove("hidden");
     syncNewCount.textContent = "0";
     syncDupCount.textContent = "0";
     syncVoidCount.textContent = "0";
     syncNcCount.textContent = "0";
-    syncResultMsg.textContent = `Analizadas: ${currentInvoices.length}. Iniciando análisis en tiempo real...`;
+    syncResultMsg.textContent = `Analizadas: ${currentInvoices.length} (${etiquetaOrigen}). Iniciando analisis en tiempo real...`;
     if (syncErrorDetail) {
       syncErrorDetail.classList.add("hidden");
       syncErrorDetail.textContent = "";
     }
 
-    updateStatus("Iniciando sincronización con EMITE.ec...", 5);
+    updateStatus(`Iniciando sincronizacion de ${etiquetaOrigen} con EMITE.ec...`, 5);
     chrome.runtime.sendMessage({
       action: "startEmiteSync",
       tabId: tab.id,
       invoices: currentInvoices,
+      origenConsulta: currentOrigenConsulta,
     });
   });
 
@@ -641,7 +721,13 @@ document.addEventListener("DOMContentLoaded", function () {
     syncVoidCount.textContent = result.totalAnuladas ?? 0;
     syncNcCount.textContent = result.notasCredito ?? 0;
 
-    let msg = `Analizadas: ${result.totalAnalizados ?? 0}. Sincronizadas: ${result.totalSincronizadas ?? 0}. `;
+    const tipoTxt =
+      result.tipoSincronizacion === "EMITIDOS"
+        ? " (Emitidas)"
+        : result.tipoSincronizacion === "RECIBIDOS"
+        ? " (Recibidas)"
+        : "";
+    let msg = `Analizadas: ${result.totalAnalizados ?? 0}${tipoTxt}. Sincronizadas: ${result.totalSincronizadas ?? 0}. `;
     if (result.totalFallidas > 0) {
       msg += `Fallidas: ${result.totalFallidas}. `;
     }

@@ -7,7 +7,7 @@
  * - Orquestar la sincronización en dos fases con EMITE.ec (facturador-ec/api).
  * - Validar URLs y nombres de archivo por seguridad (ISO/IEC 27001).
  *
- * @version 3.3.0
+ * @version 3.4.0
  * @license MIT
  */
 
@@ -98,15 +98,19 @@ function dequeueFilename(downloadId) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Ejecuta el flujo completo de sincronización diferencial en segundo plano.
+ * Ejecuta el flujo completo de sincronizacion diferencial en segundo plano.
  * Tolerante al cierre del popup gracias a la persistencia en chrome.storage.local.
+ * Soporta tanto comprobantes recibidos como emitidos.
  *
  * @async
- * @param {number} tabId - ID de la pestaña activa de sri.gob.ec.
+ * @param {number} tabId - ID de la pestana activa de sri.gob.ec.
  * @param {Array<object>} [providedInvoices=null] - Comprobantes ya escaneados por el popup.
+ * @param {string} [origenConsulta="RECIBIDOS"] - Contexto: "EMITIDOS" o "RECIBIDOS".
  */
-async function executeEmiteSync(tabId, providedInvoices = null) {
-  console.log("[SRI Pro] Iniciando sincronización con EMITE.ec en pestaña:", tabId);
+async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta = "RECIBIDOS") {
+  const esEmitidos = origenConsulta === "EMITIDOS";
+  const etiquetaOrigen = esEmitidos ? "emitidos" : "recibidos";
+  console.log(`[SRI Pro] Iniciando sincronizacion de ${etiquetaOrigen} con EMITE.ec en pestana:`, tabId);
 
   // 1. Verificar estado y credenciales
   await chrome.storage.local.set({
@@ -319,8 +323,19 @@ async function executeEmiteSync(tabId, providedInvoices = null) {
     return;
   }
 
+  // Determinar si la sincronización corresponde a comprobantes emitidos o recibidos
+  let tipoSincronizacion = origenConsulta;
+  if (!tipoSincronizacion || tipoSincronizacion === "DESCONOCIDO") {
+    const conOrigen = rawInvoices.find(
+      (inv) => inv.origenConsulta && inv.origenConsulta !== "DESCONOCIDO"
+    );
+    tipoSincronizacion = conOrigen ? conOrigen.origenConsulta : "RECIBIDOS";
+  }
+  const esEmitidos = tipoSincronizacion === "EMITIDOS";
+  const etiquetaSinc = esEmitidos ? "emitidos" : "recibidos";
+
   console.log(
-    `[SRI Pro] Comprobantes detectados: ${rawInvoices.length}. Iniciando Fase 1: Pre-check.`
+    `[SRI Pro] Comprobantes detectados: ${rawInvoices.length} (${etiquetaSinc}). Iniciando Fase 1: Pre-check.`
   );
 
   // 3. Fase 1: Pre-check diferencial (inicializar estado en tiempo real)
@@ -337,16 +352,22 @@ async function executeEmiteSync(tabId, providedInvoices = null) {
       enProgreso: true,
       loteActual: 0,
       totalLotes: 0,
+      tipoSincronizacion,
     },
     emiteSyncState: {
       status: "IN_PROGRESS",
       progress: 20,
-      step: `Verificando ${rawInvoices.length} comprobantes en EMITE.ec...`,
+      step: `Verificando ${rawInvoices.length} comprobantes ${etiquetaSinc} en EMITE.ec...`,
       error: null,
     },
   });
 
-  const preCheckRes = await preCheckInvoices(apiUrl, apiKey, rawInvoices);
+  const preCheckRes = await preCheckInvoices(
+    apiUrl,
+    apiKey,
+    rawInvoices,
+    tipoSincronizacion
+  );
   if (!preCheckRes.success) {
     await chrome.storage.local.set({
       emiteSyncState: {
@@ -469,31 +490,155 @@ async function executeEmiteSync(tabId, providedInvoices = null) {
       },
     });
 
-    // Intentar extraer el XML en memoria desde la sesion del portal SRI para evitar SOAP
+    // Intentar extraer el XML en memoria desde la sesión del portal SRI para evitar SOAP
     const chunkPayload = [];
     for (const clave of chunkKeys) {
       const inv = keyToInvoiceMap.get(clave);
       let xmlContent = null;
-      if (inv && inv.xmlLinkId && tabId) {
+
+      // Intento 1: Vía mensajería directa con content script
+      if (inv && tabId) {
         try {
           const xmlResp = await chrome.tabs.sendMessage(tabId, {
             action: "fetchComprobanteXml",
             linkId: inv.xmlLinkId,
+            claveAcceso: clave,
           });
           if (xmlResp && xmlResp.xml) {
             xmlContent = xmlResp.xml;
           }
         } catch (e) {
-          // Tab inaccesible o error de comunicacion
+          // Fallback continuará abajo
         }
       }
+
+      // Intento 2 (Respaldo resiliente): Inyección directa en todos los frames
+      // Localiza la fila por linkId o por clave de acceso en el DOM autenticado
+      if (!xmlContent && tabId) {
+        try {
+          const frameResults = await chrome.scripting.executeScript({
+            target: { tabId: tabId, allFrames: true },
+            args: [inv ? inv.xmlLinkId : null, clave],
+            func: async (targetLinkId, targetClave) => {
+              let link = targetLinkId ? document.getElementById(targetLinkId) : null;
+              if (!link && targetClave) {
+                const rows = document.querySelectorAll(
+                  "tr[data-ri], table tbody tr"
+                );
+                for (const r of rows) {
+                  if (r.textContent && r.textContent.includes(targetClave)) {
+                    link =
+                      r.querySelector('a[id*="lnkXml"]') ||
+                      (r.querySelector('img[src*="xml.gif"]')
+                        ? r.querySelector('img[src*="xml.gif"]').closest("a")
+                        : null) ||
+                      Array.from(r.querySelectorAll("a")).find((a) =>
+                        (a.textContent || "").includes("XML")
+                      );
+                    if (link) break;
+                  }
+                }
+              }
+              if (!link) return null;
+
+              const isLikelyXml = (t) => {
+                if (!t || typeof t !== "string") return false;
+                const lower = t.toLowerCase();
+                return (
+                  lower.includes("<?xml") ||
+                  lower.includes("<factura") ||
+                  lower.includes("<comprobante") ||
+                  lower.includes("<autorizacion")
+                );
+              };
+
+              // 1. Fetch directo por href si es enlace estático
+              const href = link.getAttribute("href");
+              if (href && href !== "#" && !href.startsWith("javascript:")) {
+                try {
+                  const res = await fetch(link.href, { credentials: "include" });
+                  if (res.ok) {
+                    const text = await res.text();
+                    if (isLikelyXml(text)) return text;
+                  }
+                } catch (e) {}
+              }
+
+              // 2. Submit de formulario JSF/PrimeFaces
+              const form = link.closest("form") || document.forms[0];
+              if (form) {
+                try {
+                  const formData = new FormData(form);
+                  let targetParam = link.id;
+                  const onclickAttr = link.getAttribute("onclick") || "";
+                  const match =
+                    onclickAttr.match(/'([^']+)':'([^']+)'/) ||
+                    onclickAttr.match(/"([^"]+)":"([^"]+)"/);
+                  if (match) targetParam = match[1];
+                  else if (link.name) targetParam = link.name;
+
+                  formData.set(targetParam, targetParam);
+                  if (link.id && link.id !== targetParam)
+                    formData.set(link.id, link.id);
+                  if (form.id) formData.set(form.id, form.id);
+                  formData.set("javax.faces.source", targetParam);
+
+                  const vsInput =
+                    form.querySelector('[name="javax.faces.ViewState"]') ||
+                    document.querySelector('[name="javax.faces.ViewState"]');
+                  if (vsInput && vsInput.value)
+                    formData.set("javax.faces.ViewState", vsInput.value);
+
+                  const actionUrl = form.action || window.location.href;
+                  const controller = new AbortController();
+                  const timer = setTimeout(() => controller.abort(), 12000);
+                  const res = await fetch(actionUrl, {
+                    method: "POST",
+                    body: formData,
+                    credentials: "include",
+                    signal: controller.signal,
+                  });
+                  clearTimeout(timer);
+                  if (res.ok) {
+                    const text = await res.text();
+                    if (isLikelyXml(text)) return text;
+                  }
+                } catch (e) {}
+              }
+              return null;
+            },
+          });
+
+          if (frameResults) {
+            for (const fr of frameResults) {
+              if (
+                fr.result &&
+                typeof fr.result === "string" &&
+                fr.result.length > 50
+              ) {
+                xmlContent = fr.result;
+                break;
+              }
+            }
+          }
+        } catch (scriptErr) {
+          console.warn("[SRI Pro] Fallback directo de XML falló:", scriptErr);
+        }
+      }
+
       chunkPayload.push({
         clave_acceso: clave,
         xml_content: xmlContent,
       });
     }
 
-    const chunkRes = await ingestChunk(apiUrl, apiKey, chunkPayload);
+    const chunkRes = await ingestChunk(
+      apiUrl,
+      apiKey,
+      chunkPayload,
+      2,
+      tipoSincronizacion
+    );
     if (chunkRes.success && chunkRes.data) {
       if (Array.isArray(chunkRes.data.guardados)) {
         guardadosTotal.push(...chunkRes.data.guardados);
@@ -523,6 +668,7 @@ async function executeEmiteSync(tabId, providedInvoices = null) {
       enProgreso: true,
       loteActual: idx + 1,
       totalLotes: chunks.length,
+      tipoSincronizacion,
     };
 
     await chrome.storage.local.set({
@@ -556,6 +702,7 @@ async function executeEmiteSync(tabId, providedInvoices = null) {
     enProgreso: false,
     loteActual: chunks.length,
     totalLotes: chunks.length,
+    tipoSincronizacion,
   };
 
   await chrome.storage.local.set({
@@ -592,7 +739,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "startEmiteSync") {
-    executeEmiteSync(request.tabId, request.invoices)
+    executeEmiteSync(request.tabId, request.invoices, request.origenConsulta)
       .then(() => sendResponse({ started: true }))
       .catch((err) => {
         console.error("[SRI Pro] Error fatal en executeEmiteSync:", err);
@@ -670,10 +817,10 @@ function handleDownload(url, filename, sendResponse) {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === "install") {
-    console.log("[SRI Pro] Extensión instalada correctamente (v3.3.3).");
+    console.log("[SRI Pro] Extensión instalada correctamente (v3.4.0).");
   } else if (details.reason === "update") {
     console.log(
-      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.3.3.`
+      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.4.0.`
     );
     filenameQueue.clear();
   }

@@ -1,10 +1,10 @@
 # SRI Pro Downloader
 
-**SRI Pro Downloader** es una extension profesional para Google Chrome (v3.3.3) disenada para facilitar la descarga masiva, gestion y sincronizacion automatizada de comprobantes electronicos (XML) desde el portal del SRI en Linea (Ecuador) hacia la plataforma de facturacion en la nube **EMITE.ec**.
+**SRI Pro Downloader** es una extension profesional para Google Chrome (v3.4.0) disenada para facilitar la descarga masiva, gestion y sincronizacion automatizada de comprobantes electronicos (XML) tanto emitidos como recibidos desde el portal del SRI en Linea (Ecuador) hacia la plataforma de facturacion en la nube **EMITE.ec**.
 
 ---
 
-## Caracteristicas (v3.3.3)
+## Caracteristicas (v3.4.0)
 
 - **Sincronizacion en 1 Clic con EMITE.ec**: Sincroniza directamente todos tus comprobantes consultados en el SRI hacia tu empresa en EMITE.ec sin necesidad de descargar archivos a tu disco local.
 - **Deteccion Inteligente de Duplicadas**: Algoritmo diferencial en dos fases (Pre-check) que consulta la base de datos de EMITE.ec y omite facturas previamente registradas, ahorrando ancho de banda y tiempo.

@@ -126,14 +126,21 @@ export async function testConnection(apiUrl, apiKey) {
 /**
  * Ejecuta la Fase 1 del protocolo: Pre-check diferencial rápido.
  * Compara las claves en base de datos para clasificar duplicadas, anuladas y nuevas.
+ * Soporta tanto comprobantes recibidos como emitidos.
  *
  * @async
  * @param {string} apiUrl - URL base de la API.
  * @param {string} apiKey - API Key.
  * @param {Array<object>} rawInvoices - Lista de comprobantes extraídos del portal.
+ * @param {string} [tipoSincronizacion="RECIBIDOS"] - "RECIBIDOS" o "EMITIDOS".
  * @returns {Promise<{success: boolean, data?: object, error?: string}>}
  */
-export async function preCheckInvoices(apiUrl, apiKey, rawInvoices) {
+export async function preCheckInvoices(
+  apiUrl,
+  apiKey,
+  rawInvoices,
+  tipoSincronizacion = "RECIBIDOS"
+) {
   if (!Array.isArray(rawInvoices) || rawInvoices.length === 0) {
     return {
       success: true,
@@ -152,15 +159,18 @@ export async function preCheckInvoices(apiUrl, apiKey, rawInvoices) {
     };
   }
 
+  const esEmitido = tipoSincronizacion === "EMITIDOS";
+
   // Mapear al DTO esperado por el backend
   const comprobantesDto = rawInvoices
     .filter((inv) => inv.claveAcceso && inv.claveAcceso.length === 49)
     .map((inv) => {
       // Extraer cod_doc desde las posiciones 9 y 10 de la clave de acceso
       const codDoc = inv.codDoc || inv.claveAcceso.substring(8, 10);
-      const totalNum = parseFloat(
-        (inv.importeTotal || "0").replace("$", "").replace(",", ".")
-      ) || 0;
+      const totalNum =
+        parseFloat(
+          (inv.importeTotal || "0").replace("$", "").replace(",", ".")
+        ) || 0;
 
       return {
         clave_acceso: inv.claveAcceso,
@@ -170,6 +180,7 @@ export async function preCheckInvoices(apiUrl, apiKey, rawInvoices) {
         total: totalNum,
         fecha_emision: inv.fechaEmision || "",
         estado_portal: inv.estadoPortal || "AUTORIZADO",
+        es_emitido: esEmitido,
       };
     });
 
@@ -179,7 +190,10 @@ export async function preCheckInvoices(apiUrl, apiKey, rawInvoices) {
     apiKey,
     {
       method: "POST",
-      body: JSON.stringify({ comprobantes: comprobantesDto }),
+      body: JSON.stringify({
+        comprobantes: comprobantesDto,
+        tipo_sincronizacion: tipoSincronizacion,
+      }),
     }
   );
 
@@ -196,19 +210,35 @@ export async function preCheckInvoices(apiUrl, apiKey, rawInvoices) {
  * @async
  * @param {string} apiUrl - URL base de la API.
  * @param {string} apiKey - API Key.
- * @param {Array<string>} clavesChunk - Lote de hasta 5 claves de acceso.
+ * @param {Array<string|object>} chunk - Lote de hasta 5 claves o comprobantes con XML.
  * @param {number} [ambiente=2] - Ambiente del SRI (1 pruebas, 2 producción).
+ * @param {string} [tipoSincronizacion="RECIBIDOS"] - "RECIBIDOS" o "EMITIDOS".
  * @returns {Promise<{success: boolean, data?: object, error?: string}>}
  */
-export async function ingestChunk(apiUrl, apiKey, chunk, ambiente = 2) {
+export async function ingestChunk(
+  apiUrl,
+  apiKey,
+  chunk,
+  ambiente = 2,
+  tipoSincronizacion = "RECIBIDOS"
+) {
   if (!Array.isArray(chunk) || chunk.length === 0) {
     return {
       success: true,
-      data: { procesados: 0, guardados: [], fallidos: [], total_guardados: 0, total_fallidos: 0 },
+      data: {
+        procesados: 0,
+        guardados: [],
+        fallidos: [],
+        total_guardados: 0,
+        total_fallidos: 0,
+      },
     };
   }
 
-  const payload = { ambiente };
+  const payload = {
+    ambiente,
+    tipo_sincronizacion: tipoSincronizacion,
+  };
   if (typeof chunk[0] === "string") {
     payload.claves_acceso = chunk.slice(0, 5);
   } else if (typeof chunk[0] === "object") {
