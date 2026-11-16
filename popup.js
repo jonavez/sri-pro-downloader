@@ -605,20 +605,30 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
+    // Verificar que haya comprobantes escaneados previamente
+    if (!currentInvoices || currentInvoices.length === 0) {
+      updateStatus("Debes presionar 'Escanear Página Actual' primero.", 0, true);
+      return;
+    }
+
     // Inicializar visualmente la tarjeta de sincronización en tiempo real de inmediato
     syncResultCard.classList.remove("hidden");
     syncNewCount.textContent = "0";
     syncDupCount.textContent = "0";
     syncVoidCount.textContent = "0";
     syncNcCount.textContent = "0";
-    syncResultMsg.textContent = `Analizadas: ${currentInvoices.length || 0}. Iniciando análisis en tiempo real...`;
+    syncResultMsg.textContent = `Analizadas: ${currentInvoices.length}. Iniciando análisis en tiempo real...`;
     if (syncErrorDetail) {
       syncErrorDetail.classList.add("hidden");
       syncErrorDetail.textContent = "";
     }
 
     updateStatus("Iniciando sincronización con EMITE.ec...", 5);
-    chrome.runtime.sendMessage({ action: "startEmiteSync", tabId: tab.id });
+    chrome.runtime.sendMessage({
+      action: "startEmiteSync",
+      tabId: tab.id,
+      invoices: currentInvoices,
+    });
   });
 
   function renderSyncResult(result) {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SRI Pro XML - Descarga Masiva de Comprobantes",
-  "version": "3.3.2",
+  "version": "3.3.3",
   "description": "Herramienta profesional para descarga masiva, gestión de XMLs del SRI Ecuador y sincronización con EMITE.ec.",
   "permissions": [
     "activeTab",
@@ -40,7 +40,9 @@
       ],
       "js": [
         "content.js"
-      ]
+      ],
+      "all_frames": true,
+      "run_at": "document_end"
     }
   ]
 }

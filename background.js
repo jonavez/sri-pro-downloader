@@ -103,8 +103,9 @@ function dequeueFilename(downloadId) {
  *
  * @async
  * @param {number} tabId - ID de la pestaña activa de sri.gob.ec.
+ * @param {Array<object>} [providedInvoices=null] - Comprobantes ya escaneados por el popup.
  */
-async function executeEmiteSync(tabId) {
+async function executeEmiteSync(tabId, providedInvoices = null) {
   console.log("[SRI Pro] Iniciando sincronización con EMITE.ec en pestaña:", tabId);
 
   // 1. Verificar estado y credenciales
@@ -137,26 +138,31 @@ async function executeEmiteSync(tabId) {
     return;
   }
 
-  // 2. Extraer comprobantes desde el content script
-  await chrome.storage.local.set({
-    emiteSyncState: {
-      status: "IN_PROGRESS",
-      progress: 15,
-      step: "Extrayendo comprobantes de la pantalla...",
-      error: null,
-    },
-  });
-
+  // 2. Extraer comprobantes (prioridad: comprobantes transferidos desde el popup)
   let rawInvoices = [];
-  try {
-    const response = await chrome.tabs.sendMessage(tabId, {
-      action: "extractInvoices",
+  if (Array.isArray(providedInvoices) && providedInvoices.length > 0) {
+    rawInvoices = providedInvoices;
+    console.log(`[SRI Pro] Usando ${rawInvoices.length} comprobantes proporcionados por el popup.`);
+  } else if (tabId) {
+    await chrome.storage.local.set({
+      emiteSyncState: {
+        status: "IN_PROGRESS",
+        progress: 15,
+        step: "Extrayendo comprobantes de la pantalla...",
+        error: null,
+      },
     });
-    if (response && response.invoices) {
-      rawInvoices = response.invoices;
+
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, {
+        action: "extractInvoices",
+      });
+      if (response && response.invoices && response.invoices.length > 0) {
+        rawInvoices = response.invoices;
+      }
+    } catch (err) {
+      console.warn("[SRI Pro] Error al comunicarse con content script:", err);
     }
-  } catch (err) {
-    console.warn("[SRI Pro] Error al comunicarse con content script:", err);
   }
 
   if (!rawInvoices || rawInvoices.length === 0) {
@@ -166,7 +172,7 @@ async function executeEmiteSync(tabId) {
         progress: 0,
         step: "Sin comprobantes",
         error:
-          "No se detectaron comprobantes en la pantalla. Realiza una consulta en el portal del SRI primero.",
+          "No se detectaron comprobantes en la pantalla. Realiza una consulta en el portal del SRI primero y presiona 'Escanear Página Actual'.",
       },
     });
     return;
@@ -445,7 +451,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "startEmiteSync") {
-    executeEmiteSync(request.tabId)
+    executeEmiteSync(request.tabId, request.invoices)
       .then(() => sendResponse({ started: true }))
       .catch((err) => {
         console.error("[SRI Pro] Error fatal en executeEmiteSync:", err);
@@ -521,13 +527,36 @@ function handleDownload(url, filename, sendResponse) {
 // Ciclo de Vida de Instalación / Actualización
 // ─────────────────────────────────────────────────────────────────────────────
 
-chrome.runtime.onInstalled.addListener((details) => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === "install") {
-    console.log("[SRI Pro] Extensión instalada correctamente (v3.3.2).");
+    console.log("[SRI Pro] Extensión instalada correctamente (v3.3.3).");
   } else if (details.reason === "update") {
     console.log(
-      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.3.2.`
+      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.3.3.`
     );
     filenameQueue.clear();
+  }
+
+  // Asegurar que las pestañas de SRI abiertas antes de la actualización reciban content.js
+  try {
+    const tabs = await chrome.tabs.query({ url: "*://*.sri.gob.ec/*" });
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.scripting
+          .executeScript({
+            target: { tabId: tab.id, allFrames: true },
+            files: ["content.js"],
+          })
+          .catch((err) => {
+            console.warn(
+              "[SRI Pro] Auto-inyección preventiva en pestaña SRI omitida:",
+              tab.id,
+              err.message
+            );
+          });
+      }
+    }
+  } catch (err) {
+    console.warn("[SRI Pro] Error al inicializar pestañas SRI:", err);
   }
 });
