@@ -705,12 +705,27 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     updateStatus(`Iniciando sincronizacion de ${etiquetaOrigen} con EMITE.ec...`, 5);
-    chrome.runtime.sendMessage({
-      action: "startEmiteSync",
-      tabId: tab.id,
-      invoices: currentInvoices,
-      origenConsulta: currentOrigenConsulta,
-    });
+    chrome.runtime.sendMessage(
+      {
+        action: "startEmiteSync",
+        tabId: tab.id,
+        invoices: currentInvoices,
+        origenConsulta: currentOrigenConsulta,
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error(
+            "[SRI Pro] Error comunicando con background:",
+            chrome.runtime.lastError.message
+          );
+          updateStatus(
+            `Error en el servicio de fondo: ${chrome.runtime.lastError.message}. Recarga la extensión en chrome://extensions`,
+            0,
+            true
+          );
+        }
+      }
+    );
   });
 
   function renderSyncResult(result) {

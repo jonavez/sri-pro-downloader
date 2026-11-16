@@ -7,7 +7,7 @@
  * - Orquestar la sincronización en dos fases con EMITE.ec (facturador-ec/api).
  * - Validar URLs y nombres de archivo por seguridad (ISO/IEC 27001).
  *
- * @version 3.4.0
+ * @version 3.4.1
  * @license MIT
  */
 
@@ -108,9 +108,9 @@ function dequeueFilename(downloadId) {
  * @param {string} [origenConsulta="RECIBIDOS"] - Contexto: "EMITIDOS" o "RECIBIDOS".
  */
 async function executeEmiteSync(tabId, providedInvoices = null, origenConsulta = "RECIBIDOS") {
-  const esEmitidos = origenConsulta === "EMITIDOS";
-  const etiquetaOrigen = esEmitidos ? "emitidos" : "recibidos";
-  console.log(`[SRI Pro] Iniciando sincronizacion de ${etiquetaOrigen} con EMITE.ec en pestana:`, tabId);
+  const esEmitidosInicial = origenConsulta === "EMITIDOS";
+  const etiquetaInicial = esEmitidosInicial ? "emitidos" : "recibidos";
+  console.log(`[SRI Pro] Iniciando sincronizacion de ${etiquetaInicial} con EMITE.ec en pestana:`, tabId);
 
   // 1. Verificar estado y credenciales
   await chrome.storage.local.set({
@@ -817,10 +817,10 @@ function handleDownload(url, filename, sendResponse) {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === "install") {
-    console.log("[SRI Pro] Extensión instalada correctamente (v3.4.0).");
+    console.log("[SRI Pro] Extensión instalada correctamente (v3.4.1).");
   } else if (details.reason === "update") {
     console.log(
-      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.4.0.`
+      `[SRI Pro] Extensión actualizada desde v${details.previousVersion} a v3.4.1.`
     );
     filenameQueue.clear();
   }
