@@ -13,7 +13,7 @@
  * @module emite_sync
  */
 
-const DEFAULT_TIMEOUT_MS = 35_000;
+const DEFAULT_TIMEOUT_MS = 75_000;
 
 /**
  * Normaliza la URL base de la API eliminando barras inclinadas al final.
@@ -213,6 +213,7 @@ export async function ingestChunk(apiUrl, apiKey, chunk, ambiente = 2) {
     payload.claves_acceso = chunk.slice(0, 5);
   } else if (typeof chunk[0] === "object") {
     payload.comprobantes = chunk.slice(0, 5);
+    payload.claves_acceso = chunk.slice(0, 5).map((c) => c.clave_acceso);
   }
 
   const res = await fetchEmiteApi(

@@ -30,7 +30,7 @@ Ejecuta **en orden y sin saltarte pasos**. No expliques lo que vas a hacer: **ha
 5. Genera un archivo `SECURITY_AUDIT.md` con:
    - Tabla de permisos: Permiso | Justificación | Archivo(s) que lo usa(n)
    - Hallazgos de seguridad encontrados y su resolución.
-   - Veredicto: ✅ Cumple / ⚠️ Requiere Cambios
+   - Veredicto: [OK] Cumple / [ALERTA] Requiere Cambios
 
 ---
 

@@ -43,7 +43,7 @@ const QUEUE_ENTRY_TTL_MS = 60_000;
  * Tamaño de micro-lote para ingesta segura sin timeout.
  * @const {number}
  */
-const INGEST_CHUNK_SIZE = 5;
+const INGEST_CHUNK_SIZE = 4;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Estado Interno de Descargas
@@ -322,6 +322,9 @@ async function executeEmiteSync(tabId) {
         fallidosTotal.push({ clave_acceso: k, error: chunkRes.error || "Fallo de conexión" })
       );
     }
+
+    // Breve pausa preventiva entre micro-lotes para descongestionar conexiones
+    await new Promise((r) => setTimeout(r, 600));
   }
 
   // Contar notas de crédito guardadas

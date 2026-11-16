@@ -267,6 +267,22 @@ async function downloadSingleXML(linkId, filename) {
   return true;
 }
 
+function isLikelySRIXml(text) {
+  if (!text || typeof text !== "string") return false;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("<?xml") ||
+    lower.includes("<factura") ||
+    lower.includes("<comprobante") ||
+    lower.includes("<autorizacion") ||
+    lower.includes("<notacredito") ||
+    lower.includes("<notadebito") ||
+    lower.includes("<comprobanteretencion") ||
+    lower.includes("<liquidacioncompra") ||
+    lower.includes("<guiaremision")
+  );
+}
+
 // Obtiene el contenido XML en memoria aprovechando la sesion activa del portal SRI
 async function fetchXMLContent(linkId) {
   const link = document.getElementById(linkId);
@@ -278,7 +294,7 @@ async function fetchXMLContent(linkId) {
       const res = await fetch(link.href, { credentials: "include" });
       if (res.ok) {
         const text = await res.text();
-        if (text && (text.includes("<?xml") || text.includes("<factura") || text.includes("<comprobante"))) {
+        if (isLikelySRIXml(text)) {
           return text;
         }
       }
@@ -301,7 +317,7 @@ async function fetchXMLContent(linkId) {
       });
       if (res.ok) {
         const text = await res.text();
-        if (text && (text.includes("<?xml") || text.includes("<factura") || text.includes("<comprobante"))) {
+        if (isLikelySRIXml(text)) {
           return text;
         }
       }
