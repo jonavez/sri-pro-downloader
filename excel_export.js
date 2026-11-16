@@ -49,8 +49,8 @@ export function downloadCSV(csvContent, filename = 'reporte_facturas.csv') {
   const link = document.createElement('a');
   link.setAttribute('href', url);
   link.setAttribute('download', filename);
-  link.style.visibility = 'hidden';
-  
+  link.classList.add('visually-hidden');
+
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

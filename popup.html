@@ -4,310 +4,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SRI Pro Downloader</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-    :root {
-      --primary: #1d4ed8;
-      --primary-hover: #1e3a8a;
-      --secondary: #3b82f6;
-      --success: #10b981;
-      --whatsapp: #25D366;
-      --whatsapp-hover: #128C7E;
-      --bg: #f8fafc;
-      --card-bg: #ffffff;
-      --text: #0f172a;
-      --text-light: #475569;
-      --border: #e2e8f0;
-      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-    }
-
-    body {
-      width: 400px;
-      margin: 0;
-      padding: 0;
-      font-family: 'Inter', system-ui, -apple-system, sans-serif;
-      background-color: var(--bg);
-      color: var(--text);
-      -webkit-font-smoothing: antialiased;
-    }
-
-    .header {
-      background: linear-gradient(135deg, var(--primary), var(--secondary));
-      color: white;
-      padding: 24px 20px;
-      text-align: center;
-      box-shadow: var(--shadow-md);
-      position: relative;
-      overflow: hidden;
-    }
-
-    .header::after {
-      content: '';
-      position: absolute;
-      top: -50%;
-      left: -50%;
-      width: 200%;
-      height: 200%;
-      background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
-      transform: rotate(30deg);
-      pointer-events: none;
-    }
-
-    .header h1 {
-      margin: 0;
-      font-size: 1.4rem;
-      font-weight: 700;
-      letter-spacing: -0.025em;
-    }
-
-    .header p {
-      margin: 6px 0 0;
-      font-size: 0.9rem;
-      font-weight: 400;
-      opacity: 0.9;
-    }
-
-    .container {
-      padding: 20px;
-    }
-
-    .card {
-      background: var(--card-bg);
-      border-radius: 16px;
-      padding: 20px;
-      box-shadow: var(--shadow-sm);
-      margin-bottom: 16px;
-      border: 1px solid var(--border);
-      transition: box-shadow 0.3s ease;
-    }
-
-    .card:hover {
-      box-shadow: var(--shadow-md);
-    }
-
-    .stats-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-
-    .stat-item {
-      text-align: center;
-      padding: 12px;
-      background: #f1f5f9;
-      border-radius: 12px;
-      transition: transform 0.2s ease;
-    }
-    
-    .stat-item:hover {
-      transform: translateY(-2px);
-      background: #e2e8f0;
-    }
-
-    .stat-value {
-      display: block;
-      font-size: 1.3rem;
-      font-weight: 700;
-      color: var(--primary);
-    }
-
-    .stat-label {
-      font-size: 0.8rem;
-      font-weight: 500;
-      color: var(--text-light);
-      margin-top: 4px;
-      display: inline-block;
-    }
-
-    .btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      padding: 12px;
-      border: none;
-      border-radius: 10px;
-      font-weight: 600;
-      font-size: 0.95rem;
-      cursor: pointer;
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-      margin-bottom: 12px;
-      gap: 8px;
-    }
-
-    .btn-primary {
-      background-color: var(--primary);
-      color: white;
-      box-shadow: 0 4px 6px -1px rgba(29, 78, 216, 0.3);
-    }
-
-    .btn-primary:hover {
-      background-color: var(--primary-hover);
-      transform: translateY(-2px);
-      box-shadow: 0 6px 8px -1px rgba(29, 78, 216, 0.4);
-    }
-
-    .btn-success {
-      background-color: var(--success);
-      color: white;
-      box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.3);
-    }
-    
-    .btn-success:hover {
-      background-color: #059669;
-      transform: translateY(-2px);
-      box-shadow: 0 6px 8px -1px rgba(16, 185, 129, 0.4);
-    }
-
-    .btn-outline {
-      background-color: transparent;
-      border: 1.5px solid var(--border);
-      color: var(--text);
-    }
-
-    .btn-outline:hover {
-      background-color: #f8fafc;
-      border-color: #cbd5e1;
-      transform: translateY(-1px);
-    }
-
-    .btn:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none !important;
-      box-shadow: none !important;
-    }
-
-    .progress-container {
-      margin: 16px 0;
-      display: none;
-      background: var(--card-bg);
-      padding: 16px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-    }
-
-    .progress-bar-bg {
-      background: #e2e8f0;
-      height: 10px;
-      border-radius: 5px;
-      overflow: hidden;
-      margin-bottom: 8px;
-    }
-
-    .progress-bar-fill {
-      background: linear-gradient(90deg, var(--success), #34d399);
-      height: 100%;
-      width: 0%;
-      transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .progress-text {
-      font-size: 0.85rem;
-      font-weight: 500;
-      text-align: center;
-      color: var(--text-light);
-    }
-
-    .invoice-list {
-      max-height: 220px;
-      overflow-y: auto;
-      font-size: 0.85rem;
-      border-radius: 8px;
-    }
-
-    .invoice-item {
-      padding: 12px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      transition: background-color 0.2s;
-    }
-
-    .invoice-item:hover {
-      background-color: #f8fafc;
-    }
-
-    .invoice-item:last-child {
-      border-bottom: none;
-    }
-
-    .invoice-info {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .invoice-amount {
-      font-weight: 700;
-      color: var(--text);
-      background: #f1f5f9;
-      padding: 4px 8px;
-      border-radius: 6px;
-    }
-
-    .footer {
-      text-align: center;
-      padding: 20px;
-      background-color: var(--card-bg);
-      border-top: 1px solid var(--border);
-    }
-    
-    .whatsapp-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      background-color: var(--whatsapp);
-      color: white;
-      padding: 8px 16px;
-      border-radius: 24px;
-      text-decoration: none;
-      font-weight: 600;
-      font-size: 0.9rem;
-      transition: all 0.2s ease;
-      gap: 8px;
-      box-shadow: 0 4px 6px -1px rgba(37, 211, 102, 0.3);
-    }
-    
-    .whatsapp-btn:hover {
-      background-color: var(--whatsapp-hover);
-      transform: translateY(-2px);
-      box-shadow: 0 6px 8px -1px rgba(37, 211, 102, 0.4);
-    }
-
-    /* Scrollbar styling */
-    ::-webkit-scrollbar {
-      width: 6px;
-    }
-
-    ::-webkit-scrollbar-track {
-      background: transparent;
-    }
-
-    ::-webkit-scrollbar-thumb {
-      background: #cbd5e1;
-      border-radius: 10px;
-    }
-    
-    ::-webkit-scrollbar-thumb:hover {
-      background: #94a3b8;
-    }
-  </style>
+  <title>SRI Pro XML</title>
+  <link rel="stylesheet" href="popup.css">
 </head>
 
 <body>
   <div class="header">
-    <h1>SRI Pro Downloader</h1>
-    <p>Gestión inteligente de comprobantes</p>
+    <h1>SRI Pro XML</h1>
+    <p>Descarga masiva de comprobantes</p>
   </div>
 
   <div class="container">
-    <!-- Dashboard Stats -->
+    <!-- Panel de Estadísticas -->
     <div class="stats-grid">
       <div class="stat-item">
         <span class="stat-value" id="totalInvoices">0</span>
@@ -319,75 +27,186 @@
       </div>
     </div>
 
-    <!-- Actions -->
+    <!-- Acciones Principales -->
     <div class="card">
       <button id="scanBtn" class="btn btn-primary">
-        🔍 Escanear Página Actual
+        <span class="btn-icon" data-icon="search"></span>
+        Escanear Página Actual
       </button>
 
-      <div id="actionButtons" style="display: none;">
+      <div id="actionButtons" class="hidden">
         <button id="downloadBtn" class="btn btn-success">
-          ⬇️ Descargar XMLs
+          <span class="btn-icon" data-icon="download"></span>
+          Descargar XMLs
         </button>
         <button id="exportBtn" class="btn btn-outline">
-          📊 Exportar a Excel (CSV)
+          <span class="btn-icon" data-icon="spreadsheet"></span>
+          Exportar a Excel (CSV)
         </button>
-        <button id="downloadAllBtn" class="btn btn-outline"
-          style="margin-top: 10px; border-color: var(--primary); color: var(--primary);">
-          📑 Descargar Todas las Páginas
+        <button id="downloadAllBtn" class="btn btn-outline btn-download-all">
+          <span class="btn-icon" data-icon="documents"></span>
+          Descargar Todas las Páginas
+        </button>
+        <button id="syncEmiteBtn" class="btn btn-sync">
+          <span class="btn-icon" data-icon="cloudCheck"></span>
+          Sincronizar con EMITE.ec
         </button>
       </div>
     </div>
 
-    <!-- Progress -->
-    <div id="progressContainer" class="progress-container">
+    <!-- Barra de Progreso -->
+    <div id="progressContainer" class="progress-container hidden">
       <div class="progress-bar-bg">
         <div id="progressBar" class="progress-bar-fill"></div>
       </div>
       <div id="progressText" class="progress-text">Iniciando...</div>
     </div>
 
+    <!-- Tarjeta de Resultado de Sincronización EMITE.ec -->
+    <div id="syncResultCard" class="card sync-card hidden">
+      <div class="sync-card__header">
+        <span class="btn-icon" data-icon="cloudCheck"></span>
+        <h3 class="section-title">Sincronización EMITE.ec</h3>
+      </div>
+      <div class="sync-stats-grid">
+        <div class="sync-stat">
+          <span class="sync-stat__value" id="syncNewCount">0</span>
+          <span class="sync-stat__label">Nuevas</span>
+        </div>
+        <div class="sync-stat">
+          <span class="sync-stat__value" id="syncDupCount">0</span>
+          <span class="sync-stat__label">Duplicadas</span>
+        </div>
+        <div class="sync-stat">
+          <span class="sync-stat__value" id="syncVoidCount">0</span>
+          <span class="sync-stat__label">Anuladas</span>
+        </div>
+        <div class="sync-stat">
+          <span class="sync-stat__value" id="syncNcCount">0</span>
+          <span class="sync-stat__label">Notas Crédito</span>
+        </div>
+      </div>
+      <div id="syncResultMsg" class="sync-result-msg"></div>
+      <div id="syncErrorDetail" class="sync-error-detail hidden"></div>
+    </div>
+
+    <!-- Instrucciones -->
+    <div class="card card--instructions" id="instructionsCard">
+      <h3 class="section-title section-title--spaced">¿Cómo usar?</h3>
+      <ol class="instructions-list">
+        <li>Inicia sesión en el portal del SRI.</li>
+        <li>Ve a <strong>Comprobantes Electrónicos Recibidos</strong> y realiza tu consulta.</li>
+        <li>Abre esta extensión y presiona <strong>"Escanear Página Actual"</strong>.</li>
+      </ol>
+      <a href="https://srienlinea.sri.gob.ec/comprobantes-electronicos-internet/pages/consultas/recibidos/comprobantesRecibidos.jsf" target="_blank" class="btn btn-outline btn-sm sri-link-btn">
+        <span class="btn-icon" data-icon="externalLink"></span>
+        Ir al SRI
+      </a>
+    </div>
 
     <!-- Configuración -->
-    <div class="card" style="margin-top: 15px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-        <h3 style="margin: 0; font-size: 0.9rem;">Configuración</h3>
-        <button id="toggleConfigBtn" class="btn-outline"
-          style="width: auto; padding: 4px 8px; font-size: 0.7rem;">⚙️</button>
+    <div class="card card--config">
+      <div class="config-header">
+        <h3 class="section-title">Configuración</h3>
+        <button id="toggleConfigBtn" class="btn btn-outline btn-icon-sm">
+          <span class="btn-icon" data-icon="gear"></span>
+        </button>
       </div>
 
-      <div id="configPanel" style="display: none;">
-        <label style="display: block; font-size: 0.8rem; margin-bottom: 5px; color: var(--text-light);">Carpeta de
-          Descarga (dentro de Downloads):</label>
-        <div style="display: flex; gap: 5px;">
-          <input type="text" id="folderInput" placeholder="Ej: Facturas SRI/2025"
-            style="flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem;">
-          <button id="saveConfigBtn" class="btn-primary" style="width: auto; padding: 8px 12px;">Guardar</button>
+      <div id="configPanel" class="hidden">
+        <label class="config-label" for="folderInput">
+          Carpeta de Descarga (dentro de Downloads):
+        </label>
+        <div class="config-row">
+          <input type="text" id="folderInput" class="config-input" placeholder="Ej: Facturas SRI/2025">
+          <button id="saveConfigBtn" class="btn btn-primary btn-sm">Guardar</button>
         </div>
-        <div id="configStatus" style="font-size: 0.75rem; margin-top: 5px; min-height: 15px;"></div>
+        <div id="configStatus" class="config-status"></div>
+
+        <hr class="config-divider">
+        <h4 class="config-subtitle">Plataforma EMITE.ec</h4>
+        <label class="config-label" for="emiteApiUrl">
+          URL de API EMITE.ec:
+        </label>
+        <input type="text" id="emiteApiUrl" class="config-input" placeholder="https://api.emite.ec">
+
+        <label class="config-label" for="emiteApiKey">
+          API Key de tu Empresa:
+        </label>
+        <div class="config-row">
+          <input type="password" id="emiteApiKey" class="config-input" placeholder="Ingresa tu API Key de EMITE.ec">
+          <button id="saveEmiteBtn" class="btn btn-primary btn-sm">Guardar</button>
+        </div>
+        <div class="config-row">
+          <button id="testEmiteBtn" class="btn btn-outline btn-sm">
+            <span class="btn-icon" data-icon="plug"></span>
+            Probar Conexión
+          </button>
+          <span id="emiteConnectionBadge" class="connection-badge badge--disconnected">Desconectado</span>
+        </div>
+        <div id="emiteConfigStatus" class="config-status"></div>
       </div>
     </div>
 
-    <!-- Debug Log (Oculto por defecto) -->
-    <div id="debugLog"
-      style="display: none; background: #333; color: #fff; padding: 10px; font-size: 0.7rem; margin-top: 10px; border-radius: 6px; max-height: 100px; overflow-y: auto;">
+    <!-- Publicidad -->
+    <div class="card card--ad">
+      <div class="ad-badge">Gratis</div>
+      <h3 class="section-title section-title--spaced ad-title">¡Facturación Electrónica!</h3>
+      <p class="ad-text">Descubre <strong>emite.ec</strong>, nuestro sistema en la nube para gestionar tus facturas desde cualquier dispositivo.</p>
+      
+      <a href="https://emite.ec" target="_blank" class="btn btn-primary btn-sm">
+        <span class="btn-icon" data-icon="globe"></span>
+        Usar en la Web (emite.ec)
+      </a>
+      
+      <a href="https://play.google.com/store/apps/details?id=app.emite.ec&pcampaignid=web_share" target="_blank" class="btn btn-outline btn-sm ad-playstore-btn">
+        <span class="btn-icon" data-icon="playStore"></span>
+        Descargar en Google Play
+      </a>
     </div>
 
-    <!-- List -->
-    <div class="card" id="listContainer" style="display: none;">
-      <h3 style="margin: 0 0 10px 0; font-size: 0.9rem;">Detalle</h3>
+    <!-- Log de Depuración (oculto por defecto) -->
+    <div id="debugLog" class="debug-log hidden"></div>
+
+    <!-- Lista de Facturas -->
+    <div class="card hidden" id="listContainer">
+      <h3 class="section-title section-title--spaced">Detalle</h3>
       <div id="facturasList" class="invoice-list"></div>
     </div>
   </div>
 
   <div class="footer">
-    <div style="margin-bottom: 12px; font-weight: 500; font-size: 0.85rem; color: var(--text-light);">Desarrollado y Soportado por:</div>
-    <a href="https://wa.me/593958900757?text=Hola%20Jonathan,%20estoy%20usando%20la%20extensi%C3%B3n%20SRI%20Pro%20Downloader%20y%20necesito%20ayuda." target="_blank" class="whatsapp-btn">
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16">
-        <path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592zm3.615-4.934c-.197-.099-1.17-.578-1.353-.646-.182-.065-.315-.099-.445.099-.133.197-.513.646-.627.775-.114.133-.232.148-.43.05-.197-.1-.836-.308-1.592-.985-.59-.525-.985-1.175-1.103-1.372-.114-.198-.011-.304.088-.403.087-.088.197-.232.296-.346.1-.114.133-.198.198-.33.065-.134.034-.248-.015-.347-.05-.099-.445-1.076-.612-1.47-.16-.389-.323-.335-.445-.34-.114-.007-.247-.007-.38-.007a.729.729 0 0 0-.529.247c-.182.198-.691.677-.691 1.654 0 .977.71 1.916.81 2.049.098.133 1.394 2.132 3.383 2.992.47.205.84.326 1.129.418.475.152.904.129 1.246.08.38-.058 1.171-.48 1.338-.943.164-.464.164-.86.114-.943-.049-.084-.182-.133-.38-.232z"/>
-      </svg>
+    <div class="footer-text">
+      Disenado y desarrollado por el equipo de <a href="https://nuro.ec" target="_blank" class="footer-link">nuro</a>
+    </div>
+    <a href="https://wa.me/593958900756?text=Hola%20Jonathan,%20estoy%20usando%20la%20extensi%C3%B3n%20SRI%20Pro%20XML%20y%20necesito%20ayuda."
+      target="_blank" class="whatsapp-btn">
+      <span class="btn-icon" data-icon="whatsapp"></span>
       Jonathan Chavez
     </a>
+    <div class="social-section">
+      <p class="social-label">Siguenos en nuestras redes sociales</p>
+      <div class="social-grid">
+        <a href="https://facebook.com/nurolatam" target="_blank" class="social-link social-link--facebook" aria-label="Facebook">
+          <span class="social-icon" data-icon="facebook"></span>
+        </a>
+        <a href="https://instagram.com/nurolatam" target="_blank" class="social-link social-link--instagram" aria-label="Instagram">
+          <span class="social-icon" data-icon="instagram"></span>
+        </a>
+        <a href="https://x.com/nurolatam" target="_blank" class="social-link social-link--x" aria-label="X">
+          <span class="social-icon" data-icon="x"></span>
+        </a>
+        <a href="https://tiktok.com/@nurolatam" target="_blank" class="social-link social-link--tiktok" aria-label="TikTok">
+          <span class="social-icon" data-icon="tiktok"></span>
+        </a>
+        <a href="https://linkedin.com/company/nurolatam" target="_blank" class="social-link social-link--linkedin" aria-label="LinkedIn">
+          <span class="social-icon" data-icon="linkedin"></span>
+        </a>
+        <a href="https://youtube.com/@nurolatam" target="_blank" class="social-link social-link--youtube" aria-label="YouTube">
+          <span class="social-icon" data-icon="youtube"></span>
+        </a>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="popup.js"></script>

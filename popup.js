@@ -1,26 +1,56 @@
+// popup.js — Lógica principal del popup de SRI Pro XML (v3.3)
+
 import { convertToCSV, downloadCSV } from "./excel_export.js";
 import { generateFilename } from "./utils.js";
+import { injectIcons } from "./icons.js";
+import { testConnection } from "./emite_sync.js";
 
 document.addEventListener("DOMContentLoaded", function () {
-  // Elementos UI
+  // Inyectar íconos SVG en los botones
+  injectIcons();
+
+  // ─── Elementos del DOM ───────────────────────────────────────────────
   const scanBtn = document.getElementById("scanBtn");
   const downloadBtn = document.getElementById("downloadBtn");
   const exportBtn = document.getElementById("exportBtn");
   const downloadAllBtn = document.getElementById("downloadAllBtn");
+  const syncEmiteBtn = document.getElementById("syncEmiteBtn");
   const actionButtons = document.getElementById("actionButtons");
   const listContainer = document.getElementById("listContainer");
   const facturasList = document.getElementById("facturasList");
   const progressContainer = document.getElementById("progressContainer");
   const progressBar = document.getElementById("progressBar");
   const progressText = document.getElementById("progressText");
-
-  // Stats
   const totalInvoicesEl = document.getElementById("totalInvoices");
   const totalAmountEl = document.getElementById("totalAmount");
+  const toggleConfigBtn = document.getElementById("toggleConfigBtn");
+  const configPanel = document.getElementById("configPanel");
+  const folderInput = document.getElementById("folderInput");
+  const saveConfigBtn = document.getElementById("saveConfigBtn");
+  const configStatus = document.getElementById("configStatus");
+  const debugLog = document.getElementById("debugLog");
+  const instructionsCard = document.getElementById("instructionsCard");
+
+  // Elementos de EMITE.ec
+  const syncResultCard = document.getElementById("syncResultCard");
+  const syncNewCount = document.getElementById("syncNewCount");
+  const syncDupCount = document.getElementById("syncDupCount");
+  const syncVoidCount = document.getElementById("syncVoidCount");
+  const syncNcCount = document.getElementById("syncNcCount");
+  const syncResultMsg = document.getElementById("syncResultMsg");
+  const syncErrorDetail = document.getElementById("syncErrorDetail");
+
+  const emiteApiUrlInput = document.getElementById("emiteApiUrl");
+  const emiteApiKeyInput = document.getElementById("emiteApiKey");
+  const saveEmiteBtn = document.getElementById("saveEmiteBtn");
+  const testEmiteBtn = document.getElementById("testEmiteBtn");
+  const emiteConnectionBadge = document.getElementById("emiteConnectionBadge");
+  const emiteConfigStatus = document.getElementById("emiteConfigStatus");
 
   let currentInvoices = [];
 
-  // 1. Escanear
+  // ─── Escanear Facturas ───────────────────────────────────────────────
+
   scanBtn.addEventListener("click", async () => {
     updateStatus("Escaneando...", 0);
     clearDebug();
@@ -36,7 +66,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     try {
-      logDebug("v2.4: Intentando comunicación vía mensaje...");
+      logDebug("v3.1: Intentando comunicación vía mensaje...");
       try {
         const response = await chrome.tabs.sendMessage(tab.id, {
           action: "extractInvoices",
@@ -57,7 +87,7 @@ document.addEventListener("DOMContentLoaded", function () {
         logDebug("Intentando inyección directa...");
       }
 
-      // Fallback: Inyección directa
+      // Fallback: Inyección directa en todos los frames
       const injectionResults = await chrome.scripting.executeScript({
         target: { tabId: tab.id, allFrames: true },
         func: extractInvoicesFromPage,
@@ -81,7 +111,7 @@ document.addEventListener("DOMContentLoaded", function () {
       logDebug(`Inyección completada. Encontradas: ${foundInvoices.length}`);
 
       if (foundInvoices.length > 0) {
-        // Eliminar duplicados
+        // Eliminar duplicados por número de factura
         const uniqueInvoices = Array.from(
           new Map(foundInvoices.map((item) => [item.numero, item])).values()
         );
@@ -94,18 +124,21 @@ document.addEventListener("DOMContentLoaded", function () {
       console.error("Error fatal:", error);
       updateStatus("Error crítico. Ver log abajo.", 0, true);
       logDebug("Error: " + error.message);
-      document.getElementById("debugLog").style.display = "block";
+      debugLog.classList.remove("hidden");
     }
   });
+
+  // ─── Procesamiento de Resultados ─────────────────────────────────────
 
   function handleScanResult(invoices) {
     if (invoices && invoices.length > 0) {
       currentInvoices = invoices;
       updateDashboard(currentInvoices);
 
-      actionButtons.style.display = "block";
-      listContainer.style.display = "block";
-      progressContainer.style.display = "none";
+      actionButtons.classList.remove("hidden");
+      listContainer.classList.remove("hidden");
+      progressContainer.classList.add("hidden");
+      if (instructionsCard) instructionsCard.classList.add("hidden");
 
       renderList(currentInvoices);
     } else {
@@ -113,22 +146,25 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   }
 
+  // ─── Log de Depuración ───────────────────────────────────────────────
+
   function logDebug(msg) {
-    const debugEl = document.getElementById("debugLog");
-    debugEl.style.display = "block"; // Asegurar que sea visible si hay logs
+    debugLog.classList.remove("hidden");
     const line = document.createElement("div");
     line.textContent = `> ${msg}`;
-    debugEl.appendChild(line);
+    debugLog.appendChild(line);
     console.log(msg);
   }
 
   function clearDebug() {
-    const debugEl = document.getElementById("debugLog");
-    debugEl.innerHTML = "";
-    debugEl.style.display = "none";
+    debugLog.innerHTML = "";
+    debugLog.classList.add("hidden");
   }
 
-  // Función inyectada v2.4 (Misma lógica robusta que content.js)
+  // ─── Función Inyectada v3.1 (misma lógica robusta que content.js) ───
+  // NOTA: Esta función se inyecta en la página vía chrome.scripting.executeScript
+  // y no puede importar módulos. Por eso la lógica de extracción está duplicada.
+
   function extractInvoicesFromPage() {
     const logs = [];
     const log = (msg) => {
@@ -138,7 +174,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     try {
       const invoices = [];
-      // Selector robusto
+      // Selector robusto para filas PrimeFaces
       let rows = document.querySelectorAll("tr[data-ri]");
 
       if (rows.length === 0) {
@@ -159,11 +195,11 @@ document.addEventListener("DOMContentLoaded", function () {
           invoices: [],
           count: 0,
           logs: logs,
-          error: `No se encontró tabla de facturas.`,
+          error: "No se encontró tabla de facturas.",
         };
       }
 
-      // Helper limpieza robusta
+      // Limpieza robusta de texto en celdas
       const clean = (el) => {
         if (!el) return "";
         let html = el.innerHTML || "";
@@ -173,6 +209,12 @@ document.addEventListener("DOMContentLoaded", function () {
         return txt.replace(/\s+/g, " ").trim();
       };
 
+      // Patrones de extracción
+      const INVOICE_PATTERN = /(\d{3}-\d{3}-\d{9,})/;
+      const RUC_PATTERN = /\b(\d{13})\b/;
+      const DATE_PATTERN = /(\d{2}\/\d{2}\/\d{4})/;
+      const MONEY_PATTERN = /^\d{1,3}([.,]\d{3})*[.,]\d{2}$/;
+
       rows.forEach((row, index) => {
         try {
           const cells = row.querySelectorAll("td");
@@ -180,35 +222,30 @@ document.addEventListener("DOMContentLoaded", function () {
 
           const cellTexts = Array.from(cells).map((c) => clean(c));
 
-          if (index === 0) log(`Inj Row 0: ${cellTexts.slice(0, 3).join("|")}`);
-
-          const invoicePattern = /(\d{3}-\d{3}-\d{9,})/;
-          const rucPattern = /\b(\d{13})\b/;
-          const datePattern = /(\d{2}\/\d{2}\/\d{4})/;
-          const moneyPattern = /^\d{1,3}([.,]\d{3})*[.,]\d{2}$/;
+          if (index === 0)
+            log(`Inj Fila 0: ${cellTexts.slice(0, 3).join("|")}`);
 
           let numero = "SIN_NUMERO";
           let ruc = "SIN_RUC";
           let razonSocial = "SIN_RAZON";
           let fechaEmision = "SIN_FECHA";
           let fechaAutorizacion = "";
-
           let valorSinImpuestos = "0.00";
           let iva = "0.00";
           let importeTotal = "0.00";
 
-          // 1. Factura
+          // 1. Número de factura
           for (let txt of cellTexts) {
-            const m = txt.match(invoicePattern);
+            const m = txt.match(INVOICE_PATTERN);
             if (m) {
               numero = m[0];
               break;
             }
           }
 
-          // 2. RUC
+          // 2. RUC y Razón Social
           for (let txt of cellTexts) {
-            const m = txt.match(rucPattern);
+            const m = txt.match(RUC_PATTERN);
             if (m) {
               ruc = m[0];
               let remainder = txt.replace(ruc, "").trim();
@@ -221,17 +258,17 @@ document.addEventListener("DOMContentLoaded", function () {
           // 3. Fechas
           const foundDates = [];
           for (let txt of cellTexts) {
-            const m = txt.match(datePattern);
+            const m = txt.match(DATE_PATTERN);
             if (m) foundDates.push(m[0]);
           }
           if (foundDates.length > 0) fechaEmision = foundDates[0];
           fechaAutorizacion = foundDates.length > 1 ? foundDates[1] : "";
 
-          // 4. Dinero
+          // 4. Valores monetarios (desde el final de la fila)
           const moneyValues = [];
           for (let i = cellTexts.length - 1; i >= 0; i--) {
             let val = cellTexts[i].replace("$", "").trim();
-            if (moneyPattern.test(val)) moneyValues.unshift(val);
+            if (MONEY_PATTERN.test(val)) moneyValues.unshift(val);
             if (moneyValues.length >= 3) break;
           }
           if (moneyValues.length >= 1)
@@ -244,6 +281,36 @@ document.addEventListener("DOMContentLoaded", function () {
           let tipoSerie = "";
           let claveAcceso = "";
 
+          // Búsqueda de clave de acceso (49 dígitos)
+          for (let txt of cellTexts) {
+            const m = txt.match(/\b\d{49}\b/);
+            if (m) {
+              claveAcceso = m[0];
+              break;
+            }
+          }
+          if (!claveAcceso && cellTexts[3] && cellTexts[3].length >= 49) {
+            claveAcceso = cellTexts[3].trim();
+          }
+
+          let codDoc = "01";
+          if (claveAcceso && claveAcceso.length === 49) {
+            codDoc = claveAcceso.substring(8, 10);
+          }
+
+          let estadoPortal = "AUTORIZADO";
+          for (let txt of cellTexts) {
+            const upper = txt.toUpperCase();
+            if (upper.includes("ANULAD") || upper.includes("CANCELAD")) {
+              estadoPortal = "ANULADO";
+              break;
+            } else if (upper.includes("NO AUTORIZAD") || upper.includes("RECHAZAD")) {
+              estadoPortal = "NO_AUTORIZADO";
+              break;
+            }
+          }
+
+          // Enlace XML (búsqueda prioritaria → secundaria → terciaria)
           let xmlLinkId = null;
           let anchor = row.querySelector('a[id*="lnkXml"]');
           if (!anchor) {
@@ -271,6 +338,8 @@ document.addEventListener("DOMContentLoaded", function () {
               razonSocial,
               tipoSerie,
               claveAcceso,
+              codDoc,
+              estadoPortal,
               fechaAutorizacion,
               fechaEmision,
               valorSinImpuestos,
@@ -280,7 +349,7 @@ document.addEventListener("DOMContentLoaded", function () {
             });
           }
         } catch (e) {
-          // ignore row
+          // Ignorar fila con error de parseo
         }
       });
 
@@ -290,13 +359,15 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   }
 
-  // 2. Descargar XMLs
+  // ─── Descargar XMLs de la Página Actual ──────────────────────────────
+
   downloadBtn.addEventListener("click", () => {
     if (currentInvoices.length === 0) return;
     processDownloads(currentInvoices);
   });
 
-  // 3. Exportar Excel
+  // ─── Exportar a CSV ──────────────────────────────────────────────────
+
   exportBtn.addEventListener("click", () => {
     if (currentInvoices.length === 0) return;
     const csv = convertToCSV(currentInvoices);
@@ -306,12 +377,30 @@ document.addEventListener("DOMContentLoaded", function () {
     );
   });
 
-  // 4. Descargar Todo
+  // ─── Descarga Masiva (Todas las Páginas) ─────────────────────────────
+
   downloadAllBtn.addEventListener("click", () => {
     startBatchDownload();
   });
 
-  // Funciones Helper
+  // ─── Funciones de UI ─────────────────────────────────────────────────
+
+  /**
+   * Escapa caracteres HTML para prevenir inyección XSS
+   * cuando se inserta texto dinámico vía innerHTML.
+   */
+  function escapeHtml(str) {
+    if (!str) return "";
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /**
+   * Actualiza el panel de estadísticas con los totales calculados.
+   */
   function updateDashboard(invoices) {
     totalInvoicesEl.textContent = invoices.length;
     const total = invoices.reduce((sum, inv) => {
@@ -321,36 +410,44 @@ document.addEventListener("DOMContentLoaded", function () {
     totalAmountEl.textContent = `$${total.toFixed(2)}`;
   }
 
+  /**
+   * Renderiza la lista visual de facturas escaneadas.
+   * Usa escapeHtml para prevenir XSS en datos provenientes del DOM del SRI.
+   */
   function renderList(invoices) {
     facturasList.innerHTML = invoices
       .map(
         (inv) => `
       <div class="invoice-item">
         <div class="invoice-info">
-          <span style="font-weight:600; font-size:0.8rem;">${inv.razonSocial}</span>
-          <span style="color:#64748b; font-size:0.75rem;">${inv.numero}</span>
+          <span class="invoice-name">${escapeHtml(inv.razonSocial)}</span>
+          <span class="invoice-number">${escapeHtml(inv.numero)}</span>
         </div>
-        <div class="invoice-amount">$${inv.importeTotal}</div>
+        <div class="invoice-amount">$${escapeHtml(inv.importeTotal)}</div>
       </div>
     `
       )
       .join("");
   }
 
+  /**
+   * Actualiza la barra de progreso y su texto.
+   * Usa classList para alternar estados visuales (error/éxito)
+   * en lugar de manipulación directa de .style.
+   */
   function updateStatus(text, percent, isError = false) {
-    progressContainer.style.display = "block";
+    progressContainer.classList.remove("hidden");
     progressText.textContent = text;
-    progressText.style.color = isError ? "#ef4444" : "#64748b";
-    progressBar.style.width = `${percent}%`;
-    progressBar.style.backgroundColor = isError ? "#ef4444" : "#10b981";
+
+    // Alternar clases de estado visual
+    progressText.classList.toggle("progress-text--error", isError);
+    progressBar.classList.toggle("progress-bar--error", isError);
+
+    // Ancho dinámico de la barra via CSS custom property
+    progressBar.style.setProperty('--progress-width', `${percent}%`);
   }
 
-  // Configuración
-  const toggleConfigBtn = document.getElementById("toggleConfigBtn");
-  const configPanel = document.getElementById("configPanel");
-  const folderInput = document.getElementById("folderInput");
-  const saveConfigBtn = document.getElementById("saveConfigBtn");
-  const configStatus = document.getElementById("configStatus");
+  // ─── Configuración ───────────────────────────────────────────────────
 
   chrome.storage.local.get(["downloadFolder"], (result) => {
     if (result.downloadFolder) {
@@ -359,18 +456,180 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   toggleConfigBtn.addEventListener("click", () => {
-    configPanel.style.display =
-      configPanel.style.display === "none" ? "block" : "none";
+    configPanel.classList.toggle("hidden");
   });
 
   saveConfigBtn.addEventListener("click", () => {
-    const folder = folderInput.value.trim().replace(/[\\:*?"<>|]/g, ""); // Limpiar caracteres inválidos
+    const folder = folderInput.value.trim().replace(/[\\:*?"<>|]/g, "");
     chrome.storage.local.set({ downloadFolder: folder }, () => {
-      configStatus.textContent = "Guardado correctamente ✅";
-      configStatus.style.color = "#10b981";
-      setTimeout(() => (configStatus.textContent = ""), 2000);
+      configStatus.textContent = "Guardado correctamente";
+      configStatus.classList.add("config-status--success");
+      setTimeout(() => {
+        configStatus.textContent = "";
+        configStatus.classList.remove("config-status--success");
+      }, 2000);
     });
   });
+
+  // ─── Configuración EMITE.ec ──────────────────────────────────────────
+
+  chrome.storage.local.get(
+    ["emiteApiUrl", "emiteApiKey", "lastEmiteSyncResult", "emiteSyncState"],
+    (result) => {
+      if (result.emiteApiUrl) {
+        emiteApiUrlInput.value = result.emiteApiUrl;
+      } else {
+        emiteApiUrlInput.value = "https://api.emite.ec";
+      }
+
+      if (result.emiteApiKey) {
+        emiteApiKeyInput.value = result.emiteApiKey;
+        emiteConnectionBadge.textContent = "Configurado";
+        emiteConnectionBadge.className = "connection-badge badge--connected";
+      }
+
+      if (result.lastEmiteSyncResult) {
+        renderSyncResult(result.lastEmiteSyncResult);
+      }
+
+      if (result.emiteSyncState && result.emiteSyncState.status === "IN_PROGRESS") {
+        updateStatus(result.emiteSyncState.step, result.emiteSyncState.progress);
+      }
+    }
+  );
+
+  saveEmiteBtn.addEventListener("click", () => {
+    const url = emiteApiUrlInput.value.trim() || "https://api.emite.ec";
+    const key = emiteApiKeyInput.value.trim();
+    chrome.storage.local.set({ emiteApiUrl: url, emiteApiKey: key }, () => {
+      emiteConfigStatus.textContent = "Configuración guardada";
+      emiteConfigStatus.classList.add("config-status--success");
+      if (key) {
+        emiteConnectionBadge.textContent = "Configurado";
+        emiteConnectionBadge.className = "connection-badge badge--connected";
+      }
+      setTimeout(() => {
+        emiteConfigStatus.textContent = "";
+        emiteConfigStatus.classList.remove("config-status--success");
+      }, 2000);
+    });
+  });
+
+  testEmiteBtn.addEventListener("click", async () => {
+    const url = emiteApiUrlInput.value.trim() || "https://api.emite.ec";
+    const key = emiteApiKeyInput.value.trim();
+    if (!key) {
+      emiteConnectionBadge.textContent = "Sin API Key";
+      emiteConnectionBadge.className = "connection-badge badge--disconnected";
+      emiteConfigStatus.textContent = "Ingresa tu API Key primero";
+      return;
+    }
+
+    emiteConnectionBadge.textContent = "Probando...";
+    emiteConnectionBadge.className = "connection-badge badge--testing";
+
+    const res = await testConnection(url, key);
+    if (res.success && res.data) {
+      const companyName = res.data.razon_social || res.data.ruc || "Conectado";
+      emiteConnectionBadge.textContent = companyName;
+      emiteConnectionBadge.className = "connection-badge badge--connected";
+      emiteConfigStatus.textContent = `Conexión exitosa con ${companyName}`;
+      emiteConfigStatus.classList.add("config-status--success");
+      chrome.storage.local.set({ emiteApiUrl: url, emiteApiKey: key });
+    } else {
+      emiteConnectionBadge.textContent = "Error";
+      emiteConnectionBadge.className = "connection-badge badge--disconnected";
+      emiteConfigStatus.textContent = res.error || "Fallo de conexión";
+    }
+    setTimeout(() => {
+      emiteConfigStatus.textContent = "";
+      emiteConfigStatus.classList.remove("config-status--success");
+    }, 4000);
+  });
+
+  // ─── Sincronización con EMITE.ec ─────────────────────────────────────
+
+  syncEmiteBtn.addEventListener("click", async () => {
+    const storage = await chrome.storage.local.get(["emiteApiKey"]);
+    if (!storage.emiteApiKey) {
+      configPanel.classList.remove("hidden");
+      emiteApiKeyInput.focus();
+      updateStatus("Ingresa tu API Key de EMITE.ec en Configuración", 0, true);
+      return;
+    }
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) {
+      updateStatus("Error: No se detectó pestaña activa", 0, true);
+      return;
+    }
+
+    updateStatus("Iniciando sincronización con EMITE.ec...", 5);
+    chrome.runtime.sendMessage({ action: "startEmiteSync", tabId: tab.id });
+  });
+
+  function renderSyncResult(result) {
+    if (!result) return;
+    syncResultCard.classList.remove("hidden");
+    syncNewCount.textContent = result.totalSincronizadas ?? 0;
+    syncDupCount.textContent = result.totalDuplicadas ?? 0;
+    syncVoidCount.textContent = result.totalAnuladas ?? 0;
+    syncNcCount.textContent = result.notasCredito ?? 0;
+
+    let msg = `Analizadas: ${result.totalAnalizados ?? 0}. Sincronizadas: ${result.totalSincronizadas ?? 0}. `;
+    if (result.totalFallidas > 0) {
+      msg += `Fallidas: ${result.totalFallidas}. `;
+    }
+    syncResultMsg.textContent = msg;
+
+    if (
+      result.totalFallidas > 0 &&
+      Array.isArray(result.fallidosDetalle) &&
+      result.fallidosDetalle.length > 0
+    ) {
+      const motivos = [
+        ...new Set(
+          result.fallidosDetalle
+            .map((f) => f.error)
+            .filter((err) => Boolean(err))
+        ),
+      ];
+      const detalleTexto =
+        motivos.length > 0
+          ? `Causa del fallo: ${motivos.slice(0, 2).join(" | ")}`
+          : "Causa no especificada por el servidor.";
+      syncErrorDetail.textContent = detalleTexto;
+      syncErrorDetail.classList.remove("hidden");
+    } else {
+      syncErrorDetail.classList.add("hidden");
+    }
+  }
+
+  // Escuchar cambios de estado en chrome.storage para reactividad en tiempo real
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local") {
+      if (changes.emiteSyncState) {
+        const state = changes.emiteSyncState.newValue;
+        if (state) {
+          if (state.status === "IN_PROGRESS") {
+            updateStatus(state.step, state.progress);
+          } else if (state.status === "SUCCESS") {
+            updateStatus(state.step, 100);
+            setTimeout(() => {
+              progressContainer.classList.add("hidden");
+            }, 3000);
+          } else if (state.status === "ERROR") {
+            updateStatus(state.error || state.step, 0, true);
+          }
+        }
+      }
+      if (changes.lastEmiteSyncResult) {
+        renderSyncResult(changes.lastEmiteSyncResult.newValue);
+      }
+    }
+  });
+
+  // ─── Proceso de Descargas ────────────────────────────────────────────
 
   async function processDownloads(invoices) {
     updateStatus("Iniciando descargas...", 0);
@@ -411,9 +670,9 @@ document.addEventListener("DOMContentLoaded", function () {
       await new Promise((r) => setTimeout(r, 500));
     }
 
-    updateStatus("¡Descarga completada!", 100);
+    updateStatus("Descarga completada", 100);
     setTimeout(() => {
-      progressContainer.style.display = "none";
+      progressContainer.classList.add("hidden");
     }, 3000);
   }
 
@@ -426,6 +685,8 @@ document.addEventListener("DOMContentLoaded", function () {
       });
     });
   }
+
+  // ─── Listener de Progreso ────────────────────────────────────────────
 
   chrome.runtime.onMessage.addListener((request) => {
     if (request.action === "updateProgress") {

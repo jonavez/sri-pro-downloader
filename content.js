@@ -1,4 +1,4 @@
-// content.js - Lógica de extracción e interacción con la página (v2.4)
+// content.js - Lógica de extracción e interacción con la página (v3.1)
 
 function extractInvoiceData() {
   const logs = [];
@@ -7,7 +7,7 @@ function extractInvoiceData() {
     logs.push(msg);
   };
 
-  log("SRI Pro v2.4: Iniciando extracción robusta...");
+  log("SRI Pro v3.1: Iniciando extracción robusta...");
 
   const invoices = [];
 
@@ -148,7 +148,38 @@ function extractInvoiceData() {
 
       // fallback
       let tipoSerie = cellTexts[2] || "";
-      let claveAcceso = cellTexts[3] || "";
+      let claveAcceso = "";
+
+      // Busqueda robusta de clave de acceso (49 digitos)
+      for (let txt of cellTexts) {
+        const m = txt.match(/\b\d{49}\b/);
+        if (m) {
+          claveAcceso = m[0];
+          break;
+        }
+      }
+      if (!claveAcceso && cellTexts[3] && cellTexts[3].length >= 49) {
+        claveAcceso = cellTexts[3].trim();
+      }
+
+      // Tipo de documento segun clave de acceso (posiciones 9 y 10)
+      let codDoc = "01";
+      if (claveAcceso && claveAcceso.length === 49) {
+        codDoc = claveAcceso.substring(8, 10);
+      }
+
+      // Estado del comprobante en el portal SRI
+      let estadoPortal = "AUTORIZADO";
+      for (let txt of cellTexts) {
+        const upper = txt.toUpperCase();
+        if (upper.includes("ANULAD") || upper.includes("CANCELAD")) {
+          estadoPortal = "ANULADO";
+          break;
+        } else if (upper.includes("NO AUTORIZAD") || upper.includes("RECHAZAD")) {
+          estadoPortal = "NO_AUTORIZADO";
+          break;
+        }
+      }
 
       // XML LINK
       let xmlLinkId = null;
@@ -184,6 +215,8 @@ function extractInvoiceData() {
           razonSocial,
           tipoSerie,
           claveAcceso,
+          codDoc,
+          estadoPortal,
           fechaAutorizacion,
           fechaEmision,
           valorSinImpuestos,
@@ -202,7 +235,7 @@ function extractInvoiceData() {
   return { invoices, total: invoices.length, logs: logs };
 }
 
-// Simular clic y manejar descarga (Misma lógica v2.2, funciona bien)
+// Simular clic y manejar descarga
 async function downloadSingleXML(linkId, filename) {
   const link = document.getElementById(linkId);
   if (!link) return false;
@@ -234,6 +267,51 @@ async function downloadSingleXML(linkId, filename) {
   return true;
 }
 
+// Obtiene el contenido XML en memoria aprovechando la sesion activa del portal SRI
+async function fetchXMLContent(linkId) {
+  const link = document.getElementById(linkId);
+  if (!link) return null;
+
+  const href = link.getAttribute("href");
+  if (href && href !== "#" && !href.startsWith("javascript:")) {
+    try {
+      const res = await fetch(link.href, { credentials: "include" });
+      if (res.ok) {
+        const text = await res.text();
+        if (text && (text.includes("<?xml") || text.includes("<factura") || text.includes("<comprobante"))) {
+          return text;
+        }
+      }
+    } catch (e) {
+      console.warn("[SRI Pro] Error en fetch directo XML:", e);
+    }
+  }
+
+  // En PrimeFaces/Mojarra, el link ejecuta un submit de formulario
+  const form = link.closest("form") || document.forms[0];
+  if (form) {
+    try {
+      const formData = new FormData(form);
+      formData.set(linkId, linkId);
+      const actionUrl = form.action || window.location.href;
+      const res = await fetch(actionUrl, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (res.ok) {
+        const text = await res.text();
+        if (text && (text.includes("<?xml") || text.includes("<factura") || text.includes("<comprobante"))) {
+          return text;
+        }
+      }
+    } catch (e) {
+      console.warn("[SRI Pro] Error en fetch JSF XML:", e);
+    }
+  }
+  return null;
+}
+
 // Navegación
 function hasNextPage() {
   const nextBtn = document.querySelector(".ui-paginator-next");
@@ -258,6 +336,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     downloadSingleXML(request.linkId, request.filename)
       .then(() => sendResponse({ success: true }))
       .catch((e) => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
+  if (request.action === "fetchComprobanteXml") {
+    fetchXMLContent(request.linkId)
+      .then((xml) => sendResponse({ xml }))
+      .catch((e) => sendResponse({ xml: null, error: e.message }));
     return true;
   }
 
