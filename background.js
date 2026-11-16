@@ -163,6 +163,147 @@ async function executeEmiteSync(tabId, providedInvoices = null) {
     } catch (err) {
       console.warn("[SRI Pro] Error al comunicarse con content script:", err);
     }
+
+    // Respaldo resiliente: Si la mensajería falló, extraer directamente vía scripting en todos los frames
+    if (!rawInvoices || rawInvoices.length === 0) {
+      try {
+        console.log("[SRI Pro] Intentando extracción de respaldo vía scripting.executeScript...");
+        const injectionResults = await chrome.scripting.executeScript({
+          target: { tabId: tabId, allFrames: true },
+          func: () => {
+            const invoices = [];
+            let rows = document.querySelectorAll("tr[data-ri]");
+            if (rows.length === 0) {
+              const allRows = document.querySelectorAll("table tbody tr");
+              const filtered = [];
+              allRows.forEach((r) => {
+                if (r.innerText && /\d{2}\/\d{2}\/\d{4}/.test(r.innerText)) filtered.push(r);
+              });
+              rows = filtered;
+            }
+            const clean = (el) => {
+              if (!el) return "";
+              let html = el.innerHTML || "";
+              html = html.replace(/<br\s*\/?>/gi, " ");
+              html = html.replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gim, "");
+              let txt = html.replace(/<[^>]*>/g, " ");
+              return txt.replace(/\s+/g, " ").trim();
+            };
+            const INVOICE_PATTERN = /(\d{3}-\d{3}-\d{9,})/;
+            const RUC_PATTERN = /\b(\d{13})\b/;
+            const DATE_PATTERN = /(\d{2}\/\d{2}\/\d{4})/;
+            const MONEY_PATTERN = /^\d{1,3}([.,]\d{3})*[.,]\d{2}$/;
+
+            rows.forEach((row, index) => {
+              try {
+                const cells = row.querySelectorAll("td");
+                if (cells.length < 3) return;
+                const cellTexts = Array.from(cells).map((c) => clean(c));
+                let numero = "SIN_NUMERO";
+                let ruc = "SIN_RUC";
+                let razonSocial = "SIN_RAZON";
+                let fechaEmision = "SIN_FECHA";
+                let fechaAutorizacion = "";
+                let valorSinImpuestos = "0.00";
+                let iva = "0.00";
+                let importeTotal = "0.00";
+
+                for (let txt of cellTexts) {
+                  const m = txt.match(INVOICE_PATTERN);
+                  if (m) { numero = m[0]; break; }
+                }
+                for (let txt of cellTexts) {
+                  const m = txt.match(RUC_PATTERN);
+                  if (m) {
+                    ruc = m[0];
+                    let remainder = txt.replace(ruc, "").trim().replace(/^[\s-.,]+/, "");
+                    if (remainder.length > 2) razonSocial = remainder;
+                    break;
+                  }
+                }
+                const foundDates = [];
+                for (let txt of cellTexts) {
+                  const m = txt.match(DATE_PATTERN);
+                  if (m) foundDates.push(m[0]);
+                }
+                if (foundDates.length > 0) fechaEmision = foundDates[0];
+                fechaAutorizacion = foundDates.length > 1 ? foundDates[1] : "";
+
+                const moneyValues = [];
+                for (let i = cellTexts.length - 1; i >= 0; i--) {
+                  let val = cellTexts[i].replace("$", "").trim();
+                  if (MONEY_PATTERN.test(val)) moneyValues.unshift(val);
+                  if (moneyValues.length >= 3) break;
+                }
+                if (moneyValues.length >= 1) importeTotal = moneyValues[moneyValues.length - 1];
+                if (moneyValues.length >= 2) iva = moneyValues[moneyValues.length - 2];
+                if (moneyValues.length >= 3) valorSinImpuestos = moneyValues[moneyValues.length - 3];
+
+                let claveAcceso = "";
+                for (let txt of cellTexts) {
+                  const m = txt.match(/\b\d{49}\b/);
+                  if (m) { claveAcceso = m[0]; break; }
+                }
+                if (!claveAcceso && cellTexts[3] && cellTexts[3].length >= 49) {
+                  claveAcceso = cellTexts[3].trim();
+                }
+
+                let codDoc = "01";
+                if (claveAcceso && claveAcceso.length === 49) {
+                  codDoc = claveAcceso.substring(8, 10);
+                }
+
+                let estadoPortal = "AUTORIZADO";
+                for (let txt of cellTexts) {
+                  const upper = txt.toUpperCase();
+                  if (upper.includes("ANULAD") || upper.includes("CANCELAD")) {
+                    estadoPortal = "ANULADO";
+                    break;
+                  } else if (upper.includes("NO AUTORIZAD") || upper.includes("RECHAZAD")) {
+                    estadoPortal = "NO_AUTORIZADO";
+                    break;
+                  }
+                }
+
+                let anchor = row.querySelector('a[id*="lnkXml"]') || (row.querySelector('img[src*="xml.gif"]') ? row.querySelector('img[src*="xml.gif"]').closest("a") : null);
+                let xmlLinkId = anchor ? (anchor.id || "sri_gen_" + Math.random().toString(36).substr(2)) : null;
+
+                if (anchor || (claveAcceso && claveAcceso.length === 49)) {
+                  invoices.push({
+                    numero, ruc, razonSocial, tipoSerie: "", claveAcceso, codDoc, estadoPortal,
+                    fechaAutorizacion, fechaEmision, valorSinImpuestos, iva, importeTotal, xmlLinkId,
+                    rowIndex: index
+                  });
+                }
+              } catch (e) {}
+            });
+            return invoices;
+          },
+        });
+
+        if (injectionResults) {
+          for (const frameResult of injectionResults) {
+            if (Array.isArray(frameResult.result) && frameResult.result.length > 0) {
+              rawInvoices = rawInvoices.concat(frameResult.result);
+            }
+          }
+        }
+      } catch (scriptErr) {
+        console.warn("[SRI Pro] Fallback scripting.executeScript también falló:", scriptErr);
+      }
+    }
+  }
+
+  // Deduplicar comprobantes por clave de acceso o número
+  if (rawInvoices && rawInvoices.length > 0) {
+    const seen = new Set();
+    rawInvoices = rawInvoices.filter((inv) => {
+      const key = inv.claveAcceso || inv.numero;
+      if (!key || key === "SIN_NUMERO") return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   if (!rawInvoices || rawInvoices.length === 0) {

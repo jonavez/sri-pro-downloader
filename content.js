@@ -208,7 +208,9 @@ function extractInvoiceData() {
           anchor.id = "sri_gen_" + Math.random().toString(36).substr(2);
         }
         xmlLinkId = anchor.id;
+      }
 
+      if (anchor || (claveAcceso && claveAcceso.length === 49)) {
         invoices.push({
           numero,
           ruc,
